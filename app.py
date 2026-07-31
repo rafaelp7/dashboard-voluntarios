@@ -103,12 +103,13 @@ def classificar_setor(localidade):
     return 'Não Classificado'
 
 # ---------------------------------------------------------
-# CARREGAMENTO DE DADOS (CACHED)
+# CARREGAMENTO DE DADOS (CACHED) DINÂMICO
 # ---------------------------------------------------------
 @st.cache_data
-def load_data():
+def load_data(mes, ano):
+    nome_arquivo = f"tabela {mes:02d}-{ano}.xlsx"
     try:
-        df = pd.read_excel('tabela.xlsx')
+        df = pd.read_excel(nome_arquivo)
     except FileNotFoundError:
         return None
     
@@ -168,32 +169,44 @@ def load_fechamento_data(mes, ano):
 # --- Início da Aplicação ---
 st.title("📊 Painel de Comando - Voluntários e Fechamento")
 
-# Carrega a base
-df = load_data()
+# ---------------------------------------------------------
+# NOVO CABEÇALHO: FILTROS DINÂMICOS DE DATA
+# ---------------------------------------------------------
+st.markdown('<div class="filtros-container">', unsafe_allow_html=True)
+
+hoje = datetime.date.today()
+mes_anterior = hoje.month - 1 if hoje.month > 1 else 12
+ano_padrao = hoje.year if hoje.month > 1 else hoje.year - 1
+meses_nomes = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
+
+col_data1, col_data2 = st.columns(2)
+mes_selecionado_nome = col_data1.selectbox("🗓️ Mês Referência:", list(meses_nomes.values()), index=mes_anterior - 1)
+ano_selecionado = col_data2.number_input("📅 Ano:", min_value=2020, max_value=2100, value=ano_padrao, step=1)
+mes_selecionado_num = list(meses_nomes.keys())[list(meses_nomes.values()).index(mes_selecionado_nome)]
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# CARREGAR DADOS COM BASE NA DATA SELECIONADA
+# ---------------------------------------------------------
+df = load_data(mes_selecionado_num, ano_selecionado)
+df_form = load_form_data()
+df_fechamento = load_fechamento_data(mes_selecionado_num, ano_selecionado)
+
 
 if df is not None:
     # ---------------------------------------------------------
-    # NOVO CABEÇALHO: FILTROS DINÂMICOS E BOTÕES
+    # NOVO CABEÇALHO: BOTÕES DE SETOR E IGREJA
     # ---------------------------------------------------------
     st.markdown('<div class="filtros-container">', unsafe_allow_html=True)
     
-    # 1. Filtros de Data e Atividade (Menores no topo)
-    hoje = datetime.date.today()
-    mes_anterior = hoje.month - 1 if hoje.month > 1 else 12
-    ano_padrao = hoje.year if hoje.month > 1 else hoje.year - 1
-    meses_nomes = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
-
-    col_data1, col_data2, col_data3 = st.columns(3)
-    mes_selecionado_nome = col_data1.selectbox("🗓️ Mês Referência:", list(meses_nomes.values()), index=mes_anterior - 1)
-    ano_selecionado = col_data2.number_input("📅 Ano:", min_value=2020, max_value=2100, value=ano_padrao, step=1)
-    mes_selecionado_num = list(meses_nomes.keys())[list(meses_nomes.values()).index(mes_selecionado_nome)]
-    
+    # Filtro de Atividade extraído da base já carregada
     atividades_disp = ["Todas"] + sorted(list(df['Livro'].dropna().unique())) if 'Livro' in df.columns else ["Todas"]
-    selected_atividade = col_data3.selectbox("🎯 Filtrar Atividade Específica:", atividades_disp)
+    selected_atividade = st.selectbox("🎯 Filtrar Atividade Específica (Gráficos/Métricas):", atividades_disp)
 
     st.markdown("<br><b>🏢 Selecione o Setor de Atuação:</b>", unsafe_allow_html=True)
     
-    # 2. Botões de Setor (Modernos)
+    # Botões de Setor
     setores_opcoes = ["Todos", "Setor 1", "Setor 2", "Setor 3", "Não Classificado"]
     cols_setores = st.columns(5)
     for i, s in enumerate(setores_opcoes):
@@ -201,20 +214,17 @@ if df is not None:
             estilo = "primary" if st.session_state.setor == s else "secondary"
             st.button(s, type=estilo, use_container_width=True, on_click=set_setor, args=(s,))
             
-    # 3. Botões de Igreja (Aparecem dinamicamente baseados no Setor escolhido)
+    # Botões de Igreja (Aparecem dinamicamente)
     if st.session_state.setor != "Todos":
         st.markdown(f"<b>⛪ Selecione a Igreja ({st.session_state.setor}):</b>", unsafe_allow_html=True)
         
-        # Filtra as igrejas válidas daquele setor
         if st.session_state.setor in SETORES:
             igrejas_do_setor = sorted([l for l in SETORES[st.session_state.setor] if l not in IGREJAS_IGNORADAS])
         else:
-            # Para "Não Classificado"
             igrejas_do_setor = sorted([l for l in df[df['Setor'] == 'Não Classificado']['Localidade'].dropna().unique() if l not in IGREJAS_IGNORADAS])
             
         igrejas_opcoes = ["Todas"] + igrejas_do_setor
         
-        # Cria uma grade de botões (ex: 4 por linha em computadores)
         cols_por_linha = 4
         for i in range(0, len(igrejas_opcoes), cols_por_linha):
             cols_igrejas = st.columns(cols_por_linha)
@@ -224,8 +234,8 @@ if df is not None:
                     with cols_igrejas[j]:
                         estilo_igreja = "primary" if st.session_state.igreja == igreja_nome else "secondary"
                         st.button(
-                            igreja_nome.split('-')[-1].strip(), # Mostra só o nome da igreja para caber no botão
-                            help=igreja_nome, # Mostra o nome completo ao passar o mouse
+                            igreja_nome.split('-')[-1].strip() if igreja_nome != "Todas" else "Todas",
+                            help=igreja_nome, 
                             type=estilo_igreja, 
                             use_container_width=True, 
                             on_click=set_igreja, 
@@ -236,36 +246,28 @@ if df is not None:
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown("---")
 
-
     # ---------------------------------------------------------
-    # APLICAÇÃO GLOBAL DOS FILTROS
+    # APLICAÇÃO GLOBAL DOS FILTROS NOS DADOS
     # ---------------------------------------------------------
-    # 1. Filtro de Data na base
-    if 'Data' in df.columns:
-        df = df[(df['Data'].dt.month == mes_selecionado_num) & (df['Data'].dt.year == ano_selecionado)]
-        
-    # 2. Filtro de Atividade
+    # A data já foi filtrada na leitura do arquivo!
+    
+    # 1. Filtro de Atividade
     if selected_atividade != "Todas":
         df = df[df['Livro'] == selected_atividade]
 
-    # 3. Filtros de Botão (Setor e Igreja)
+    # 2. Filtros de Botão (Setor e Igreja)
     if st.session_state.setor != "Todos":
         df = df[df['Setor'] == st.session_state.setor]
         
     if st.session_state.igreja != "Todas":
         df = df[df['Localidade'] == st.session_state.igreja]
 
-    # Carrega bases auxiliares
-    df_form = load_form_data()
-    df_fechamento = load_fechamento_data(mes_selecionado_num, ano_selecionado)
-
 
     # ---------------------------------------------------------
     # 🚨 SEÇÃO DE ALERTAS E PENDÊNCIAS
     # ---------------------------------------------------------
-    st.header("🚨 Alertas e Pendências do Mês")
+    st.header(f"🚨 Alertas e Pendências ({mes_selecionado_nome}/{ano_selecionado})")
     
-    # Determina o grupo de igrejas alvo das cobranças
     if st.session_state.igreja != "Todas":
         igrejas_cobradas = [st.session_state.igreja]
     elif st.session_state.setor != "Todos":
@@ -275,7 +277,7 @@ if df is not None:
 
     igrejas_presentes_df = df['Localidade'].dropna().unique().tolist() if 'Localidade' in df.columns else []
 
-    # BLOCO 1: Nenhuma atividade lançada
+    # BLOCO 1: Nenhuma atividade
     st.subheader("❌ Nenhuma atividade lançada")
     igrejas_sem_lancamento = [igreja for igreja in igrejas_cobradas if igreja not in igrejas_presentes_df]
     if igrejas_sem_lancamento:
@@ -338,7 +340,7 @@ if df is not None:
         else:
             st.success(f"✅ Formulários em dia ({mes_selecionado_nome})!")
 
-        # --- GRÁFICO DE QUALIDADE (TAXA DE ERROS) ---
+        # Gráfico Taxa de Erros
         st.subheader("📊 Taxa de Erros Qualitativos (Por Atividade)")
         df_form_grafico = df_form_filtrado[df_form_filtrado['Igreja_Identificada'].isin(igrejas_cobradas)]
         
@@ -422,4 +424,4 @@ if df is not None:
             st.plotly_chart(fig_fun, use_container_width=True)
 
 else:
-    st.error("⚠️ Base de dados principal não encontrada. Certifique-se de que o arquivo 'tabela.xlsx' foi enviado para o repositório.")
+    st.error(f"⚠️ Base de dados não encontrada: 'tabela {mes_selecionado_num:02d}-{ano_selecionado}.xlsx'. Certifique-se de que o arquivo foi enviado para o repositório.")

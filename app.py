@@ -92,43 +92,37 @@ def load_data():
 def load_form_data():
     try:
         df_form = pd.read_excel('FORMULÁRIO QUALITATIVO 2026 (respostas).xlsx')
+        df_form.columns = df_form.columns.str.strip()
         
-        # 1. Encontrar coluna de data de submissão
-        date_col = None
-        for col in df_form.columns:
-            # Procura palavras-chave comuns de formulário
-            if any(word in str(col).lower() for word in ['data', 'carimbo', 'timestamp', 'hora']):
-                date_col = col
-                break
-        
-        if not date_col:
-            date_col = df_form.columns[0] # Assume a primeira se não achar nome óbvio
+        if 'MÊS' in df_form.columns:
+            df_form['Mes_Submissao'] = pd.to_numeric(df_form['MÊS'], errors='coerce')
+        else:
+            df_form['Mes_Submissao'] = None
             
-        df_form['Data_Submissao'] = pd.to_datetime(df_form[date_col], errors='coerce')
-        df_form['Mes_Submissao'] = df_form['Data_Submissao'].dt.month
+        if 'ANO' in df_form.columns:
+            df_form['Ano_Submissao'] = pd.to_numeric(df_form['ANO'], errors='coerce')
+        else:
+            df_form['Ano_Submissao'] = None
         
-        # 2. Encontrar qual coluna tem o nome da Igreja e padronizar
+        colunas_igreja = ['ESCOLHA A CASA DE ORAÇÃO', 'ESCOLHA A CASA DE ORAÇÃO 2', 'ESCOLHA A CASA DE ORAÇÃO 3']
+        
+        def extrair_igreja_da_linha(row):
+            for col in colunas_igreja:
+                if col in row.index and pd.notna(row[col]) and str(row[col]).strip() != '':
+                    return str(row[col]).strip()
+            return None
+            
+        df_form['Igreja_Bruta'] = df_form.apply(extrair_igreja_da_linha, axis=1)
+
         def normalizar_igreja(valor):
-            if pd.isna(valor): return None
+            if pd.isna(valor) or not valor: return None
             val_limpo = str(valor).strip().upper()
             for ig_oficial in todas_igrejas:
                 if ig_oficial.upper() in val_limpo or val_limpo in ig_oficial.upper():
                     return ig_oficial
             return val_limpo
 
-        church_col = None
-        for col in df_form.columns:
-            if df_form[col].dtype == object:
-                amostra = df_form[col].dropna().astype(str).str.upper().tolist()
-                # Se pelo menos uma das nossas igrejas aparecer nesta coluna, achamos ela!
-                if any(ig.upper() in amostra_str for ig in todas_igrejas for amostra_str in amostra):
-                    church_col = col
-                    break
-                    
-        if church_col:
-            df_form['Igreja_Identificada'] = df_form[church_col].apply(normalizar_igreja)
-        else:
-            df_form['Igreja_Identificada'] = 'Não identificada'
+        df_form['Igreja_Identificada'] = df_form['Igreja_Bruta'].apply(normalizar_igreja)
             
         return df_form
     except FileNotFoundError:
@@ -201,23 +195,35 @@ meses_nomes = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio',
 
 hoje = datetime.date.today()
 mes_atual = hoje.month
-# Define o mês anterior (Se for janeiro, volta para dezembro do ano anterior)
-mes_anterior = 12 if mes_atual == 1 else mes_atual - 1
+ano_atual = hoje.year
 
-col_mes, _ = st.columns([1, 3])
+mes_anterior = 12 if mes_atual == 1 else mes_atual - 1
+ano_padrao = ano_atual - 1 if mes_atual == 1 else ano_atual
+
+col_mes, col_ano, _ = st.columns([2, 2, 4])
 with col_mes:
     mes_selecionado_nome = st.selectbox(
-        "Mês de envio do formulário:", 
+        "Mês de referência:", 
         list(meses_nomes.values()), 
-        index=mes_anterior - 1 # Ajuste de índice pois a lista começa em 0
+        index=mes_anterior - 1
+    )
+with col_ano:
+    ano_selecionado = st.number_input(
+        "Ano de referência:", 
+        min_value=2020, 
+        max_value=2100, 
+        value=ano_padrao,
+        step=1
     )
 
 # Descobre o número do mês com base no nome selecionado
 mes_selecionado_num = list(meses_nomes.keys())[list(meses_nomes.values()).index(mes_selecionado_nome)]
 
 if df_form is not None:
-    # Filtra os envios apenas para o mês escolhido na tela
-    df_form_filtrado = df_form[df_form['Mes_Submissao'] == mes_selecionado_num]
+    df_form_filtrado = df_form[
+        (df_form['Mes_Submissao'] == mes_selecionado_num) & 
+        (df_form['Ano_Submissao'] == ano_selecionado)
+    ]
     
     igrejas_que_responderam = df_form_filtrado['Igreja_Identificada'].dropna().unique().tolist()
     

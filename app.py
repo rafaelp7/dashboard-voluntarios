@@ -9,17 +9,32 @@ st.set_page_config(
     page_icon="📊",
     layout="wide"
 )
-# --- OCULTAR MENU E ÍCONE DO GITHUB ---
+# --- ESTILIZAÇÃO AVANÇADA (Ocultar Menu e Otimizar para Celular) ---
 esconder_estilo = """
     <style>
+    /* Oculta o menu do Streamlit e o ícone do GitHub */
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
     .stApp > header {display: none;}
+    
+    /* Regras específicas para telas de celular (menores que 768px) */
+    @media (max-width: 768px) {
+        /* Diminui o espaço em branco nas laterais e no topo */
+        .block-container {
+            padding-top: 2rem;
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+        /* Diminui um pouco o tamanho do título no celular */
+        h1 {
+            font-size: 1.8rem !important;
+        }
+    }
     </style>
 """
 st.markdown(esconder_estilo, unsafe_allow_html=True)
-# --------------------------------------
+# -------------------------------------------------------------------
 
 st.title("📊 Painel de Controle - Atividades e Voluntários")
 st.markdown("---")

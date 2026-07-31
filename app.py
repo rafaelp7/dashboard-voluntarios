@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import datetime
 
 # Configuração da página
 st.set_page_config(
@@ -39,8 +40,18 @@ SETORES = {
     ]
 }
 
-# Atividades que precisam constar obrigatoriamente
 ATIVIDADES_OBRIGATORIAS = ['LIMPEZA', 'GEM', 'PÁTIO', 'MANUTENÇÃO PREVENTIVA', 'ESPAÇO INFANTIL', 'COZINHA']
+
+# Igrejas que não devem ser cobradas nas pendências
+IGREJAS_IGNORADAS = [
+    'ADM - MARINGÁ - PR', 
+    'PIA - MARINGÁ', 
+    'BR 14-0601 - MARINGÁ - CENTRO'
+]
+
+# Lista unificada de todas as igrejas esperadas
+todas_igrejas = [igreja for lista in SETORES.values() for igreja in lista]
+igrejas_cobradas = [igreja for igreja in todas_igrejas if igreja not in IGREJAS_IGNORADAS]
 
 def classificar_setor(localidade):
     for setor, locais in SETORES.items():
@@ -55,7 +66,6 @@ def load_data():
     except FileNotFoundError:
         return None
     
-    # Remove espaços vazios nos nomes das colunas para evitar erros (ex: "Livro " para "Livro")
     df.columns = df.columns.str.strip()
     
     col_mapping = {
@@ -78,21 +88,65 @@ def load_data():
 
     return df
 
+@st.cache_data
+def load_form_data():
+    try:
+        df_form = pd.read_excel('FORMULÁRIO QUALITATIVO 2026 (respostas).xlsx')
+        
+        # 1. Encontrar coluna de data de submissão
+        date_col = None
+        for col in df_form.columns:
+            # Procura palavras-chave comuns de formulário
+            if any(word in str(col).lower() for word in ['data', 'carimbo', 'timestamp', 'hora']):
+                date_col = col
+                break
+        
+        if not date_col:
+            date_col = df_form.columns[0] # Assume a primeira se não achar nome óbvio
+            
+        df_form['Data_Submissao'] = pd.to_datetime(df_form[date_col], errors='coerce')
+        df_form['Mes_Submissao'] = df_form['Data_Submissao'].dt.month
+        
+        # 2. Encontrar qual coluna tem o nome da Igreja e padronizar
+        def normalizar_igreja(valor):
+            if pd.isna(valor): return None
+            val_limpo = str(valor).strip().upper()
+            for ig_oficial in todas_igrejas:
+                if ig_oficial.upper() in val_limpo or val_limpo in ig_oficial.upper():
+                    return ig_oficial
+            return val_limpo
+
+        church_col = None
+        for col in df_form.columns:
+            if df_form[col].dtype == object:
+                amostra = df_form[col].dropna().astype(str).str.upper().tolist()
+                # Se pelo menos uma das nossas igrejas aparecer nesta coluna, achamos ela!
+                if any(ig.upper() in amostra_str for ig in todas_igrejas for amostra_str in amostra):
+                    church_col = col
+                    break
+                    
+        if church_col:
+            df_form['Igreja_Identificada'] = df_form[church_col].apply(normalizar_igreja)
+        else:
+            df_form['Igreja_Identificada'] = 'Não identificada'
+            
+        return df_form
+    except FileNotFoundError:
+        return None
+
 df = load_data()
+df_form = load_form_data()
+
+# =========================================================
+# 🚨 SEÇÃO DE ALERTAS E PENDÊNCIAS GERAIS
+# =========================================================
+st.header("🚨 Alertas e Pendências (Tabela Base)")
 
 if df is not None:
-    # ---------------------------------------------------------
-    # 🚨 SEÇÃO DE ALERTAS E PENDÊNCIAS (Dados Globais)
-    # ---------------------------------------------------------
-    st.header("🚨 Alertas e Pendências")
-    
-    # Consolida a lista de todas as igrejas esperadas
-    todas_igrejas = [igreja for lista in SETORES.values() for igreja in lista]
-    # Lista as igrejas que apareceram na planilha
     igrejas_presentes = df['Localidade'].dropna().unique().tolist() if 'Localidade' in df.columns else []
     
-    # 1. Identificar quem não lançou nada
-    igrejas_sem_lancamento = [igreja for igreja in todas_igrejas if igreja not in igrejas_presentes]
+    # 1. Identificar quem não lançou nada (ignorando exceções)
+    igrejas_sem_lancamento = [igreja for igreja in igrejas_cobradas if igreja not in igrejas_presentes]
     
     alerta_col1, alerta_col2 = st.columns(2)
     
@@ -103,23 +157,22 @@ if df is not None:
             df_sem_lanc['Setor'] = df_sem_lanc['Igreja'].apply(classificar_setor)
             st.dataframe(df_sem_lanc[['Setor', 'Igreja']], use_container_width=True, hide_index=True)
         else:
-            st.success("Todas as igrejas possuem ao menos um lançamento!")
+            st.success("Todas as igrejas exigidas possuem ao menos um lançamento!")
 
-    # 2. Identificar quem lançou, mas faltou alguma atividade no 'Livro'
+    # 2. Identificar atividades faltando (ignorando exceções)
     with alerta_col2:
         st.subheader("⚠️ Atividades faltando")
         if 'Livro' in df.columns and 'Localidade' in df.columns:
             pendencias_atividades = []
             
             for igreja in igrejas_presentes:
+                if igreja in IGREJAS_IGNORADAS:
+                    continue # Pula as exceções
+                    
                 df_igreja = df[df['Localidade'] == igreja]
-                # Junta todo o texto da coluna Livro daquela igreja e deixa em maiúsculo para buscar
                 texto_livros = ' '.join(df_igreja['Livro'].dropna().astype(str).str.upper().tolist())
                 
-                faltam = []
-                for ativ in ATIVIDADES_OBRIGATORIAS:
-                    if ativ not in texto_livros:
-                        faltam.append(ativ)
+                faltam = [ativ for ativ in ATIVIDADES_OBRIGATORIAS if ativ not in texto_livros]
                 
                 if faltam:
                     pendencias_atividades.append({
@@ -132,33 +185,76 @@ if df is not None:
                 df_pend_ativ = pd.DataFrame(pendencias_atividades)
                 st.dataframe(df_pend_ativ, use_container_width=True, hide_index=True)
             else:
-                st.success("Todas as igrejas registraram todas as atividades obrigatórias!")
-        else:
-            st.info("Coluna 'Livro' não encontrada para verificar atividades.")
-            
-    st.markdown("---")
+                st.success("Todas as igrejas exigidas registraram todas as atividades obrigatórias!")
+else:
+    st.error("Base de dados 'tabela.xlsx' não encontrada.")
 
+st.markdown("---")
 
-    # ---------------------------------------------------------
-    # 🔍 BARRA LATERAL: FILTROS (Afeta o restante do painel)
-    # ---------------------------------------------------------
+# =========================================================
+# 📋 CONTROLE DO FORMULÁRIO QUALITATIVO
+# =========================================================
+st.header("📋 Controle do Formulário Qualitativo")
+
+meses_nomes = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 
+               7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
+
+hoje = datetime.date.today()
+mes_atual = hoje.month
+# Define o mês anterior (Se for janeiro, volta para dezembro do ano anterior)
+mes_anterior = 12 if mes_atual == 1 else mes_atual - 1
+
+col_mes, _ = st.columns([1, 3])
+with col_mes:
+    mes_selecionado_nome = st.selectbox(
+        "Mês de envio do formulário:", 
+        list(meses_nomes.values()), 
+        index=mes_anterior - 1 # Ajuste de índice pois a lista começa em 0
+    )
+
+# Descobre o número do mês com base no nome selecionado
+mes_selecionado_num = list(meses_nomes.keys())[list(meses_nomes.values()).index(mes_selecionado_nome)]
+
+if df_form is not None:
+    # Filtra os envios apenas para o mês escolhido na tela
+    df_form_filtrado = df_form[df_form['Mes_Submissao'] == mes_selecionado_num]
+    
+    igrejas_que_responderam = df_form_filtrado['Igreja_Identificada'].dropna().unique().tolist()
+    
+    # Verifica quem da lista de cobrança não está nas respostas
+    faltam_form = [igreja for igreja in igrejas_cobradas if igreja not in igrejas_que_responderam]
+    
+    if faltam_form:
+        df_faltam_form = pd.DataFrame(faltam_form, columns=["Igreja"])
+        df_faltam_form['Setor'] = df_faltam_form['Igreja'].apply(classificar_setor)
+        
+        st.warning(f"⚠️ {len(faltam_form)} igrejas não preencheram o formulário no mês de {mes_selecionado_nome}.")
+        st.dataframe(df_faltam_form[['Setor', 'Igreja']], use_container_width=True, hide_index=True)
+    else:
+        st.success(f"✅ Todas as igrejas exigidas preencheram o formulário em {mes_selecionado_nome}!")
+else:
+    st.info("Arquivo 'FORMULÁRIO QUALITATIVO 2026 (respostas).xlsx' não encontrado no repositório. Faça o upload no GitHub para ativar esta verificação.")
+
+st.markdown("---")
+
+# =========================================================
+# 🔍 BARRA LATERAL E KPIs
+# =========================================================
+if df is not None:
     st.sidebar.header("🔍 Filtros de Visualização")
 
-    # Filtro de Setor
     setores_disponiveis = ["Todos"] + sorted(list(df['Setor'].unique()))
     selected_setor = st.sidebar.selectbox("Selecione o Setor", setores_disponiveis)
     
     if selected_setor != "Todos":
         df = df[df['Setor'] == selected_setor]
 
-    # Filtro de Igreja (Localidade)
     if 'Localidade' in df.columns:
         localidades_disponiveis = ["Todas"] + sorted(list(df['Localidade'].dropna().unique()))
         selected_localidade = st.sidebar.selectbox("Selecione a Igreja", localidades_disponiveis)
         if selected_localidade != "Todas":
             df = df[df['Localidade'] == selected_localidade]
 
-    # Filtro de Função
     if 'Função' in df.columns:
         funcoes = ["Todas"] + list(df['Função'].dropna().unique())
         selected_funcao = st.sidebar.selectbox("Função", funcoes)
@@ -166,9 +262,6 @@ if df is not None:
             df = df[df['Função'] == selected_funcao]
 
 
-    # ---------------------------------------------------------
-    # 📌 CARTÕES DE MÉTRICAS E GRÁFICOS
-    # ---------------------------------------------------------
     st.subheader("📌 Métricas Gerais (Filtradas)")
     col1, col2, col3, col4 = st.columns(4)
 
@@ -228,6 +321,3 @@ if df is not None:
         df_display = df_display[cols]
 
     st.dataframe(df_display, use_container_width=True, hide_index=True)
-
-else:
-    st.error("⚠️ Base de dados não encontrada. Certifique-se de que o arquivo 'tabela.xlsx' foi enviado para o repositório.")

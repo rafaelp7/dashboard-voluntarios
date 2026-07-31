@@ -49,9 +49,9 @@ IGREJAS_IGNORADAS = [
     'BR 14-0601 - MARINGÁ - CENTRO'
 ]
 
-# Lista unificada de todas as igrejas esperadas
+# Lista unificada de todas as igrejas esperadas e filtradas
 todas_igrejas = [igreja for lista in SETORES.values() for igreja in lista]
-igrejas_cobradas = [igreja for igreja in todas_igrejas if igreja not in IGREJAS_IGNORADAS]
+igrejas_cobradas_base = [igreja for igreja in todas_igrejas if igreja not in IGREJAS_IGNORADAS]
 
 def classificar_setor(localidade):
     for setor, locais in SETORES.items():
@@ -128,20 +128,51 @@ def load_form_data():
     except FileNotFoundError:
         return None
 
+# Carregamento dos dados
 df = load_data()
 df_form = load_form_data()
 
 # =========================================================
-# 🚨 SEÇÃO DE ALERTAS E PENDÊNCIAS GERAIS
+# 🔍 BARRA LATERAL: FILTROS GLOBAIS
 # =========================================================
-st.header("🚨 Alertas e Pendências (Tabela Base)")
+st.sidebar.header("🔍 Filtros de Visualização")
+
+selected_setor = "Todos"
+selected_localidade = "Todas"
 
 if df is not None:
-    igrejas_presentes = df['Localidade'].dropna().unique().tolist() if 'Localidade' in df.columns else []
+    setores_disponiveis = ["Todos"] + sorted(list(df['Setor'].unique()))
+    selected_setor = st.sidebar.selectbox("Selecione o Setor", setores_disponiveis)
     
-    # 1. Identificar quem não lançou nada (ignorando exceções)
-    igrejas_sem_lancamento = [igreja for igreja in igrejas_cobradas if igreja not in igrejas_presentes]
+    # Prepara lista de igrejas dependendo do setor escolhido
+    if selected_setor != "Todos":
+        igrejas_no_setor = sorted(list(df[df['Setor'] == selected_setor]['Localidade'].dropna().unique()))
+        localidades_disponiveis = ["Todas"] + igrejas_no_setor
+    else:
+        localidades_disponiveis = ["Todas"] + sorted(list(df['Localidade'].dropna().unique()))
+
+    selected_localidade = st.sidebar.selectbox("Selecione a Igreja", localidades_disponiveis)
+
+
+# =========================================================
+# 🚨 SEÇÃO DE ALERTAS E PENDÊNCIAS
+# =========================================================
+st.header("🚨 Alertas e Pendências")
+
+if df is not None:
+    # 1. Aplicar os filtros na lista de igrejas a serem cobradas (igrejas_cobradas)
+    igrejas_cobradas = igrejas_cobradas_base.copy()
+    if selected_setor != "Todos":
+        igrejas_cobradas = [ig for ig in igrejas_cobradas if ig in SETORES[selected_setor]]
+    if selected_localidade != "Todas":
+        igrejas_cobradas = [selected_localidade] if selected_localidade in igrejas_cobradas else []
+
+    igrejas_presentes_geral = df['Localidade'].dropna().unique().tolist()
     
+    # 2. Identificar quem não lançou nada dentre as igrejas cobradas e filtradas
+    igrejas_sem_lancamento = [igreja for igreja in igrejas_cobradas if igreja not in igrejas_presentes_geral]
+    
+    # Layout de duas colunas para a seção de alertas
     alerta_col1, alerta_col2 = st.columns(2)
     
     with alerta_col1:
@@ -151,18 +182,19 @@ if df is not None:
             df_sem_lanc['Setor'] = df_sem_lanc['Igreja'].apply(classificar_setor)
             st.dataframe(df_sem_lanc[['Setor', 'Igreja']], use_container_width=True, hide_index=True)
         else:
-            st.success("Todas as igrejas exigidas possuem ao menos um lançamento!")
+            st.success("Nenhuma pendência total de lançamento para a seleção atual!")
 
-    # 2. Identificar atividades faltando (ignorando exceções)
-    with alerta_col2:
+        # 3. Colocar a tabela de 'Atividades Faltando' ABAIXO na mesma coluna
+        st.markdown("---")
         st.subheader("⚠️ Atividades faltando")
+        
         if 'Livro' in df.columns and 'Localidade' in df.columns:
             pendencias_atividades = []
             
-            for igreja in igrejas_presentes:
-                if igreja in IGREJAS_IGNORADAS:
-                    continue # Pula as exceções
-                    
+            # Avalia apenas as igrejas que estão na lista de cobrança filtrada E que lançaram algo
+            igrejas_para_avaliar_livro = [ig for ig in igrejas_cobradas if ig in igrejas_presentes_geral]
+            
+            for igreja in igrejas_para_avaliar_livro:
                 df_igreja = df[df['Localidade'] == igreja]
                 texto_livros = ' '.join(df_igreja['Livro'].dropna().astype(str).str.upper().tolist())
                 
@@ -179,107 +211,91 @@ if df is not None:
                 df_pend_ativ = pd.DataFrame(pendencias_atividades)
                 st.dataframe(df_pend_ativ, use_container_width=True, hide_index=True)
             else:
-                st.success("Todas as igrejas exigidas registraram todas as atividades obrigatórias!")
+                st.success("Todas as atividades registradas para a seleção atual!")
+
+    # =========================================================
+    # 📋 CONTROLE DO FORMULÁRIO QUALITATIVO (Movido para a coluna 2)
+    # =========================================================
+    with alerta_col2:
+        st.subheader("📋 Pendências Formulário Qualitativo")
+
+        meses_nomes = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 
+                       7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
+
+        hoje = datetime.date.today()
+        mes_atual = hoje.month
+        ano_atual = hoje.year
+
+        mes_anterior = 12 if mes_atual == 1 else mes_atual - 1
+        ano_padrao = ano_atual - 1 if mes_atual == 1 else ano_atual
+
+        col_mes, col_ano = st.columns([3, 2])
+        with col_mes:
+            mes_selecionado_nome = st.selectbox(
+                "Mês ref.:", 
+                list(meses_nomes.values()), 
+                index=mes_anterior - 1
+            )
+        with col_ano:
+            ano_selecionado = st.number_input(
+                "Ano ref.:", 
+                min_value=2020, 
+                max_value=2100, 
+                value=ano_padrao,
+                step=1
+            )
+
+        mes_selecionado_num = list(meses_nomes.keys())[list(meses_nomes.values()).index(mes_selecionado_nome)]
+
+        if df_form is not None:
+            df_form_filtrado = df_form[
+                (df_form['Mes_Submissao'] == mes_selecionado_num) & 
+                (df_form['Ano_Submissao'] == ano_selecionado)
+            ]
+            
+            igrejas_que_responderam = df_form_filtrado['Igreja_Identificada'].dropna().unique().tolist()
+            
+            # Usa a mesma lista base filtrada (igrejas_cobradas) que obedece a barra lateral
+            faltam_form = [igreja for igreja in igrejas_cobradas if igreja not in igrejas_que_responderam]
+            
+            if faltam_form:
+                df_faltam_form = pd.DataFrame(faltam_form, columns=["Igreja"])
+                df_faltam_form['Setor'] = df_faltam_form['Igreja'].apply(classificar_setor)
+                
+                st.warning(f"⚠️ {len(faltam_form)} pendências em {mes_selecionado_nome}.")
+                st.dataframe(df_faltam_form[['Setor', 'Igreja']], use_container_width=True, hide_index=True)
+            else:
+                st.success(f"✅ Formulários em dia ({mes_selecionado_nome})!")
+        else:
+            st.info("Arquivo de respostas não encontrado.")
+
 else:
     st.error("Base de dados 'tabela.xlsx' não encontrada.")
 
 st.markdown("---")
 
 # =========================================================
-# 📋 CONTROLE DO FORMULÁRIO QUALITATIVO
-# =========================================================
-st.header("📋 Controle do Formulário Qualitativo")
-
-meses_nomes = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 
-               7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
-
-hoje = datetime.date.today()
-mes_atual = hoje.month
-ano_atual = hoje.year
-
-mes_anterior = 12 if mes_atual == 1 else mes_atual - 1
-ano_padrao = ano_atual - 1 if mes_atual == 1 else ano_atual
-
-col_mes, col_ano, _ = st.columns([2, 2, 4])
-with col_mes:
-    mes_selecionado_nome = st.selectbox(
-        "Mês de referência:", 
-        list(meses_nomes.values()), 
-        index=mes_anterior - 1
-    )
-with col_ano:
-    ano_selecionado = st.number_input(
-        "Ano de referência:", 
-        min_value=2020, 
-        max_value=2100, 
-        value=ano_padrao,
-        step=1
-    )
-
-# Descobre o número do mês com base no nome selecionado
-mes_selecionado_num = list(meses_nomes.keys())[list(meses_nomes.values()).index(mes_selecionado_nome)]
-
-if df_form is not None:
-    df_form_filtrado = df_form[
-        (df_form['Mes_Submissao'] == mes_selecionado_num) & 
-        (df_form['Ano_Submissao'] == ano_selecionado)
-    ]
-    
-    igrejas_que_responderam = df_form_filtrado['Igreja_Identificada'].dropna().unique().tolist()
-    
-    # Verifica quem da lista de cobrança não está nas respostas
-    faltam_form = [igreja for igreja in igrejas_cobradas if igreja not in igrejas_que_responderam]
-    
-    if faltam_form:
-        df_faltam_form = pd.DataFrame(faltam_form, columns=["Igreja"])
-        df_faltam_form['Setor'] = df_faltam_form['Igreja'].apply(classificar_setor)
-        
-        st.warning(f"⚠️ {len(faltam_form)} igrejas não preencheram o formulário no mês de {mes_selecionado_nome}.")
-        st.dataframe(df_faltam_form[['Setor', 'Igreja']], use_container_width=True, hide_index=True)
-    else:
-        st.success(f"✅ Todas as igrejas exigidas preencheram o formulário em {mes_selecionado_nome}!")
-else:
-    st.info("Arquivo 'FORMULÁRIO QUALITATIVO 2026 (respostas).xlsx' não encontrado no repositório. Faça o upload no GitHub para ativar esta verificação.")
-
-st.markdown("---")
-
-# =========================================================
-# 🔍 BARRA LATERAL E KPIs
+# 📌 CARTÕES DE MÉTRICAS E GRÁFICOS (Base Filtrada)
 # =========================================================
 if df is not None:
-    st.sidebar.header("🔍 Filtros de Visualização")
-
-    setores_disponiveis = ["Todos"] + sorted(list(df['Setor'].unique()))
-    selected_setor = st.sidebar.selectbox("Selecione o Setor", setores_disponiveis)
-    
+    # Aplica os filtros nos DADOS para as métricas e gráficos
+    df_filtrado = df.copy()
     if selected_setor != "Todos":
-        df = df[df['Setor'] == selected_setor]
-
-    if 'Localidade' in df.columns:
-        localidades_disponiveis = ["Todas"] + sorted(list(df['Localidade'].dropna().unique()))
-        selected_localidade = st.sidebar.selectbox("Selecione a Igreja", localidades_disponiveis)
-        if selected_localidade != "Todas":
-            df = df[df['Localidade'] == selected_localidade]
-
-    if 'Função' in df.columns:
-        funcoes = ["Todas"] + list(df['Função'].dropna().unique())
-        selected_funcao = st.sidebar.selectbox("Função", funcoes)
-        if selected_funcao != "Todas":
-            df = df[df['Função'] == selected_funcao]
+        df_filtrado = df_filtrado[df_filtrado['Setor'] == selected_setor]
+    if selected_localidade != "Todas":
+        df_filtrado = df_filtrado[df_filtrado['Localidade'] == selected_localidade]
 
 
-    st.subheader("📌 Métricas Gerais (Filtradas)")
-    col1, col2, col3, col4 = st.columns(4)
+    st.subheader(f"📌 Métricas - {selected_setor if selected_localidade == 'Todas' else selected_localidade}")
+    col1, col2, col3 = st.columns(3)
 
-    total_registros = len(df)
-    total_voluntarios = df['Voluntario'].nunique() if 'Voluntario' in df.columns else 0
-    total_valor = df['Valor'].sum() if 'Valor' in df.columns else 0
-    media_valor = df['Valor'].mean() if 'Valor' in df.columns else 0
+    total_registros = len(df_filtrado)
+    total_valor = df_filtrado['Valor'].sum() if 'Valor' in df_filtrado.columns else 0
+    media_valor = df_filtrado['Valor'].mean() if 'Valor' in df_filtrado.columns else 0
 
     col1.metric("Total de Registros", f"{total_registros}")
-    col2.metric("Voluntários Ativos", f"{total_voluntarios}")
-    col3.metric("Valor Total (R$)", f"R$ {total_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
-    col4.metric("Valor Médio (R$)", f"R$ {media_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
+    col2.metric("Valor Total (R$)", f"R$ {total_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
+    col3.metric("Valor Médio (R$)", f"R$ {media_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
 
     st.markdown("---")
 
@@ -287,43 +303,32 @@ if df is not None:
     g_col1, g_col2 = st.columns(2)
 
     with g_col1:
-        if 'Localidade' in df.columns and 'Valor' in df.columns:
-            if selected_setor == "Todos":
-                df_grafico1 = df.groupby('Setor')['Valor'].sum().reset_index()
+        if 'Localidade' in df_filtrado.columns and 'Valor' in df_filtrado.columns:
+            if selected_setor == "Todos" and selected_localidade == "Todas":
+                df_grafico1 = df_filtrado.groupby('Setor')['Valor'].sum().reset_index()
                 x_axis = 'Setor'
                 titulo_graf = "Total (R$) por Setor"
             else:
-                df_grafico1 = df.groupby('Localidade')['Valor'].sum().reset_index()
+                df_grafico1 = df_filtrado.groupby('Localidade')['Valor'].sum().reset_index()
                 x_axis = 'Localidade'
-                titulo_graf = f"Total (R$) nas Igrejas do {selected_setor}"
+                titulo_graf = f"Total (R$) nas Igrejas"
 
-            fig_loc = px.bar(
-                df_grafico1, x=x_axis, y='Valor', title=titulo_graf,
-                text_auto='.2f', color=x_axis, color_discrete_sequence=px.colors.qualitative.Prism
-            )
-            fig_loc.update_layout(showlegend=False)
-            st.plotly_chart(fig_loc, use_container_width=True)
+            if not df_grafico1.empty:
+                fig_loc = px.bar(
+                    df_grafico1, x=x_axis, y='Valor', title=titulo_graf,
+                    text_auto='.2f', color=x_axis, color_discrete_sequence=px.colors.qualitative.Prism
+                )
+                fig_loc.update_layout(showlegend=False)
+                st.plotly_chart(fig_loc, use_container_width=True)
 
     with g_col2:
-        if 'Função' in df.columns and 'Valor' in df.columns:
-            df_fun = df.groupby('Função')['Valor'].sum().reset_index()
-            df_fun['Função'] = df_fun['Função'].astype(str)
-            fig_fun = px.pie(
-                df_fun, names='Função', values='Valor', 
-                title="Distribuição do Valor por Função", hole=0.4
-            )
-            st.plotly_chart(fig_fun, use_container_width=True)
-
-    st.markdown("---")
-
-    st.subheader("📄 Tabela de Dados Filtrados")
-    df_display = df.copy()
-    if 'Data' in df_display.columns:
-        df_display['Data'] = df_display['Data'].dt.strftime('%d/%m/%Y')
-    
-    cols = df_display.columns.tolist()
-    if 'Setor' in cols:
-        cols.insert(0, cols.pop(cols.index('Setor')))
-        df_display = df_display[cols]
-
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
+        # Alterado de Função para Atividade (Livro)
+        if 'Livro' in df_filtrado.columns and 'Valor' in df_filtrado.columns:
+            df_ativ = df_filtrado.groupby('Livro')['Valor'].sum().reset_index()
+            df_ativ['Livro'] = df_ativ['Livro'].astype(str)
+            if not df_ativ.empty:
+                fig_ativ = px.pie(
+                    df_ativ, names='Livro', values='Valor', 
+                    title="Distribuição do Valor por Atividade", hole=0.4
+                )
+                st.plotly_chart(fig_ativ, use_container_width=True)

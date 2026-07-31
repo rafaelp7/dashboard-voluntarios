@@ -372,15 +372,60 @@ if df is not None:
         ano_num = int(selected_ano)
         df_form_filtrado = df_form[(df_form['Mes_Submissao'] == mes_num) & (df_form['Ano_Submissao'] == ano_num)]
         igrejas_que_responderam = df_form_filtrado['Igreja_Identificada'].dropna().unique().tolist()
+        
+        # --- INÍCIO DA ALTERAÇÃO 3: NOVA LÓGICA QUALITATIVO E GRÁFICO ---
+        # 1. Congregações que NÃO enviaram o formulário
         faltam_form = [igreja for igreja in igrejas_cobradas if igreja not in igrejas_que_responderam]
         
+        st.markdown("**1. Formulários Não Enviados**")
         if faltam_form:
             df_faltam_form = pd.DataFrame(faltam_form, columns=["Igreja"])
             df_faltam_form['Setor'] = df_faltam_form['Igreja'].apply(classificar_setor)
-            st.warning(f"⚠️ {len(faltam_form)} congregações não enviaram o formulário.")
-            st.dataframe(df_faltam_form[['Setor', 'Igreja']], use_container_width=True, hide_index=True)
+            with st.expander(f"⚠️ {len(faltam_form)} congregações não enviaram o formulário", expanded=False):
+                st.dataframe(df_faltam_form[['Setor', 'Igreja']], use_container_width=True, hide_index=True)
         else:
-            st.success("✅ Formulários qualitativos em dia!")
+            st.success("✅ Todas as congregações enviaram o formulário!")
+
+        # 2. Atividades NÃO informadas/analisadas no formulário
+        st.markdown("**2. Atividades Não Analisadas no Formulário**")
+        colunas_analisadas = [c for c in df_form_filtrado.columns if 'ASSINALAR AS ATIVIDADES' in str(c).upper()]
+        
+        pendencias_ativ_qualitativo = []
+        
+        if colunas_analisadas:
+            for igreja in igrejas_que_responderam:
+                if igreja in igrejas_cobradas: # Somente avalia igrejas dentro do filtro atual
+                    # Pegar livros lançados no SIGA
+                    df_igreja_siga = df[df['Localidade'] == igreja]
+                    livros_lancados_siga = [str(x).upper() for x in df_igreja_siga['Livro'].dropna().unique().tolist()] if 'Livro' in df_igreja_siga.columns else []
+                    
+                    # Pegar status do Drive
+                    status_drive = buscar_status_drive_da_igreja(igreja, drive_data)
+                    
+                    # Agrupar todas as respostas desta igreja (caso mais de um colaborador tenha preenchido)
+                    respostas_igreja = df_form_filtrado[df_form_filtrado['Igreja_Identificada'] == igreja]
+                    texto_analisadas = " ".join([str(x).upper() for col in colunas_analisadas for x in respostas_igreja[col].dropna().tolist()])
+                    
+                    faltam_na_analise = []
+                    for ativ in ATIVIDADES_OBRIGATORIAS:
+                        # Regra: Só exige no form se foi lançada no SIGA OU se o PDF existe no Drive
+                        is_required = (ativ in livros_lancados_siga) or (status_drive is not None and status_drive.get(ativ) == True)
+                        
+                        if is_required and (ativ not in texto_analisadas):
+                            faltam_na_analise.append(ativ)
+                            
+                    if faltam_na_analise:
+                        pendencias_ativ_qualitativo.append({
+                            'Setor': classificar_setor(igreja),
+                            'Igreja': igreja,
+                            'Falta Analisar no Form': ", ".join(faltam_na_analise)
+                        })
+        
+        if pendencias_ativ_qualitativo:
+            with st.expander(f"⚠️ {len(pendencias_ativ_qualitativo)} congregações com atividades faltando no preenchimento", expanded=False):
+                st.dataframe(pd.DataFrame(pendencias_ativ_qualitativo), use_container_width=True, hide_index=True)
+        else:
+            st.success("✅ Todas as atividades obrigatórias foram analisadas!")
 
         st.subheader("📊 Taxa de Erros Qualitativos (Por Atividade)")
         df_form_grafico = df_form_filtrado[df_form_filtrado['Igreja_Identificada'].isin(igrejas_cobradas)]
@@ -395,7 +440,7 @@ if df is not None:
                 erros_totais += pd.to_numeric(df_form_grafico[col], errors='coerce').sum()
                 
             # Verifica o total de lançamentos na tabela local
-            lancamentos_totais = df[df['Livro'].astype(str).str.upper().str.contains(ativ.upper(), na=False)].shape[0]
+            lancamentos_totais = df[df['Livro'].astype(str).str.upper().str.contains(ativ.upper(), na=False)].shape[0] if 'Livro' in df.columns else 0
             taxa = (erros_totais / lancamentos_totais * 100) if lancamentos_totais > 0 else 0
             
             erros_por_atividade.append({
@@ -410,7 +455,12 @@ if df is not None:
             hover_data=['Erros (Qtd)', 'Lançamentos'], text_auto='.1f',
             color='Taxa de Erro (%)', color_continuous_scale="Reds"
         )
+        
+        # --- REMOVE A BARRA DE CORES LATERAL DA LEGENDA ---
+        fig_erros.update_layout(coloraxis_showscale=False) 
+        
         st.plotly_chart(fig_erros, use_container_width=True)
+        # --- FIM DA ALTERAÇÃO 3 ---
     else:
         st.info("ℹ️ Arquivo 'FORMULÁRIO QUALITATIVO 2026 (respostas).xlsx' não encontrado.")
 

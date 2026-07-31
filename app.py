@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -287,14 +286,14 @@ if df_original is not None:
     if filtro_setor != "Todos": df = df[df['Setor'] == filtro_setor]
     if filtro_igreja != "Todas": df = df[df['Localidade'] == filtro_igreja]
     
-    # 2. APLICAR FILTRO DE ATIVIDADE NO DF
+    # 2. BASE DE DADOS PARA AUDITORIA (SEM FILTRO DE ATIVIDADE PARA NÃO PERDER CONTEXTO DE FALTA)
+    df_base_pendencias = df.copy()
+
+    # 3. APLICAR FILTRO DE ATIVIDADE NO DF DE EXIBIÇÃO / KPIs
     if filtro_atividade != "Todas" and 'Livro' in df.columns:
         palavras_chave = MAPEAMENTO_ATIVIDADES.get(filtro_atividade, [filtro_atividade])
         regex_pattern = '|'.join(palavras_chave)
         df = df[df['Livro'].astype(str).str.upper().str.contains(regex_pattern, regex=True, na=False)]
-
-    # 3. BASE DE DADOS PARA AUDITORIA E KPIs (AGORA COM TODOS OS FILTROS)
-    df_base_pendencias = df.copy()
 
     st.markdown("---")
     st.subheader("⚠️ Controle de Atividades e Anexos")
@@ -302,7 +301,6 @@ if df_original is not None:
     # 4. USAR DF_BASE_PENDENCIAS PARA GERAR A AUDITORIA COMPLETA
     if 'Livro' in df_base_pendencias.columns:
         siga_lancamentos = df_base_pendencias.groupby(['Setor', 'Localidade'])['Livro'].unique().reset_index()
-    # ... (o resto do código continua igual)
     else:
         st.error("A coluna 'Livro' não foi encontrada na planilha do SIGA.")
         siga_lancamentos = pd.DataFrame(columns=['Setor', 'Localidade', 'Livro'])
@@ -353,8 +351,19 @@ if df_original is not None:
     df_pendencias_siga = pd.DataFrame(pendencias_siga) if pendencias_siga else pd.DataFrame()
     df_pendencias_drive = pd.DataFrame(pendencias_drive) if pendencias_drive else pd.DataFrame()
 
+    # --- FILTRAGEM FINAL DOS RESULTADOS PELO BOTÃO DE ATIVIDADE ---
+    if filtro_atividade != "Todas":
+        if not df_pendencias_siga.empty:
+            df_pendencias_siga = df_pendencias_siga[df_pendencias_siga['Falta Lançar no Sistema'].str.upper().str.contains(filtro_atividade, na=False)]
+        
+        if not df_pendencias_drive.empty:
+            palavras_chave_drive = MAPEAMENTO_ATIVIDADES.get(filtro_atividade, [filtro_atividade])
+            regex_drive = '|'.join(palavras_chave_drive)
+            df_pendencias_drive = df_pendencias_drive[df_pendencias_drive['Falta Anexar PDF no Drive'].str.upper().str.contains(regex_drive, regex=True, na=False)]
+
+
     # EXIBIÇÃO: PENDÊNCIAS SISTEMA
-    with st.expander(f"⚠️ {len(pendencias_siga)} congregações com pendências no Sistema (SIGA)"):
+    with st.expander(f"⚠️ {len(df_pendencias_siga)} congregações com pendências no Sistema (SIGA)"):
         if not df_pendencias_siga.empty: 
             st.dataframe(df_pendencias_siga, use_container_width=True, hide_index=True)
             pdf_bytes = gerar_pdf("Pendencias no Sistema (SIGA)", [("Pendências", df_pendencias_siga)])
@@ -363,7 +372,7 @@ if df_original is not None:
             st.success("Tudo certo no SIGA para os filtros selecionados!")
 
     # EXIBIÇÃO: PENDÊNCIAS DRIVE
-    with st.expander(f"📁 {len(pendencias_drive)} Pendencia de anexo no fechamento mensal"):
+    with st.expander(f"📁 {len(df_pendencias_drive)} Pendencia de anexo no fechamento mensal"):
         if not df_pendencias_drive.empty: 
             st.dataframe(df_pendencias_drive, use_container_width=True, hide_index=True)
             pdf_bytes = gerar_pdf("Pendencia de anexo no fechamento", [("Pendências Drive", df_pendencias_drive)])
@@ -460,7 +469,12 @@ if df_original is not None:
 
         df_pendencias_ativ_form = pd.DataFrame(pendencias_ativ_form) if pendencias_ativ_form else pd.DataFrame()
         
-        with st.expander(f"⚠️ {len(pendencias_ativ_form)} congregações com atividades faltando no preenchimento do Form"):
+        # --- FILTRO FINAL DE FORMULÁRIOS PELO BOTÃO DE ATIVIDADE ---
+        if filtro_atividade != "Todas":
+            if not df_pendencias_ativ_form.empty:
+                df_pendencias_ativ_form = df_pendencias_ativ_form[df_pendencias_ativ_form['Faltou analisar no Form'].str.upper().str.contains(filtro_atividade, na=False)]
+        
+        with st.expander(f"⚠️ {len(df_pendencias_ativ_form)} congregações com atividades faltando no preenchimento do Form"):
             if not df_pendencias_ativ_form.empty: 
                 st.dataframe(df_pendencias_ativ_form, use_container_width=True, hide_index=True)
                 pdf_bytes = gerar_pdf("Atividades Faltando no Form", [("Pendências de Preenchimento", df_pendencias_ativ_form)])
@@ -511,7 +525,7 @@ if df_original is not None:
     pdf_geral_bytes = gerar_pdf(f"Relatorio Geral de Pendencias - {selected_mes}/{selected_ano}", sessoes_gerais)
     
     st.download_button(
-        label="📥 BAixar Relatório Geral em PDF",
+        label="📥 Baixar Relatório Geral em PDF",
         data=pdf_geral_bytes,
         file_name=f"Relatorio_Geral_{selected_mes}_{selected_ano}.pdf",
         mime="application/pdf",

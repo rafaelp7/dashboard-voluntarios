@@ -138,41 +138,91 @@ def load_form_data():
     except FileNotFoundError:
         return None
 
-# --- CABEÇALHO ---
+# --- INICIALIZAÇÃO DE VARIÁVEIS DE ESTADO (MENU) ---
+if 'filtro_setor' not in st.session_state:
+    st.session_state.filtro_setor = 'Todos'
+if 'filtro_igreja' not in st.session_state:
+    st.session_state.filtro_igreja = 'Todas'
+if 'filtro_atividade' not in st.session_state:
+    st.session_state.filtro_atividade = 'Todas'
+
+# --- CABEÇALHO E MENU DESTACADO ---
 st.title("📊 Painel de Controle - Voluntários")
 
-col_data1, col_data2, _ = st.columns([2, 2, 6])
-selected_mes = col_data1.selectbox("Selecione o Mês", ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"], index=5)
-selected_ano = col_data2.selectbox("Selecione o Ano", ["2025", "2026", "2027", "2028"], index=1)
+with st.container(border=True):
+    st.subheader("📅 Período de Análise")
+    col_data1, col_data2, _ = st.columns([2, 2, 6])
+    selected_mes = col_data1.selectbox("Selecione o Mês", ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"], index=5)
+    selected_ano = col_data2.selectbox("Selecione o Ano", ["2025", "2026", "2027", "2028"], index=1)
+    
+    df_original = load_data(selected_mes, selected_ano)
+    df_form = load_form_data()
+    df_fechamento = load_fechamento_data(selected_mes, selected_ano)
 
-df_original = load_data(selected_mes, selected_ano)
-df_form = load_form_data()
-df_fechamento = load_fechamento_data(selected_mes, selected_ano)
+    if df_original is not None:
+        st.markdown("---")
+        
+        # 1. BOTÕES DE SETOR
+        st.markdown("**Selecione o Setor:**")
+        botoes_setores = ['Todos', 'Setor 1', 'Setor 2', 'Setor 3', 'Não Classificado']
+        cols_setores = st.columns(len(botoes_setores))
+        
+        for i, setor_nome in enumerate(botoes_setores):
+            is_selected = (st.session_state.filtro_setor == setor_nome)
+            if cols_setores[i].button(setor_nome, use_container_width=True, type="primary" if is_selected else "secondary", key=f"btn_{setor_nome}"):
+                st.session_state.filtro_setor = setor_nome
+                st.session_state.filtro_igreja = 'Todas'  # Reseta a igreja selecionada ao trocar de setor
+                st.rerun()
+
+        # Filtrar o DataFrame temporário para descobrir as igrejas
+        if st.session_state.filtro_setor != "Todos":
+            df_temp = df_original[df_original['Setor'] == st.session_state.filtro_setor]
+        else:
+            df_temp = df_original
+            
+        lista_igrejas = ["Todas"] + sorted([str(x) for x in df_temp['Localidade'].dropna().unique() if x not in IGREJAS_IGNORADAS])
+
+        # 2. BOTÕES DE IGREJA
+        st.markdown("**Selecione a Igreja:**")
+        cols_por_linha = 4 # Exibir em grade com 4 botões por linha para estética
+        
+        for i in range(0, len(lista_igrejas), cols_por_linha):
+            cols_ig = st.columns(cols_por_linha)
+            for j in range(cols_por_linha):
+                idx = i + j
+                if idx < len(lista_igrejas):
+                    ig_nome = lista_igrejas[idx]
+                    is_selected = (st.session_state.filtro_igreja == ig_nome)
+                    # Abrevia nomes muito longos caso necessário
+                    btn_label = ig_nome if len(ig_nome) < 40 else ig_nome[:37] + "..." 
+                    if cols_ig[j].button(btn_label, use_container_width=True, type="primary" if is_selected else "secondary", key=f"btn_ig_{idx}"):
+                        st.session_state.filtro_igreja = ig_nome
+                        st.rerun()
+
+        # 3. BOTÕES DE ATIVIDADE
+        if 'Livro' in df_original.columns:
+            st.markdown("**Filtrar por Atividade:**")
+            lista_atividades = ["Todas"] + sorted([str(x) for x in df_original['Livro'].dropna().unique()])
+            
+            # Até 6 atividades por linha
+            cols_por_linha_atv = min(len(lista_atividades), 6)
+            for i in range(0, len(lista_atividades), cols_por_linha_atv):
+                cols_atv = st.columns(cols_por_linha_atv)
+                for j in range(cols_por_linha_atv):
+                    idx = i + j
+                    if idx < len(lista_atividades):
+                        ativ_nome = lista_atividades[idx]
+                        is_selected = (st.session_state.filtro_atividade == ativ_nome)
+                        if cols_atv[j].button(ativ_nome, use_container_width=True, type="primary" if is_selected else "secondary", key=f"btn_at_{idx}"):
+                            st.session_state.filtro_atividade = ativ_nome
+                            st.rerun()
+
+# Atribuição dos filtros salvos na sessão para o restante do código
+filtro_setor = st.session_state.filtro_setor
+filtro_igreja = st.session_state.filtro_igreja
+filtro_atividade = st.session_state.filtro_atividade
 
 if df_original is not None:
-    # --- BARRA LATERAL DE FILTROS ---
-    st.sidebar.image("https://cdn-icons-png.flaticon.com/512/3389/3389081.png", width=100) # Ícone decorativo opcional
-    st.sidebar.header("🔍 Filtros de Busca")
-    
-    # Filtro de Setor
-    lista_setores = ["Todos"] + sorted([str(x) for x in df_original['Setor'].dropna().unique()])
-    filtro_setor = st.sidebar.selectbox("Setor", lista_setores)
-    
-    # Filtrar DF temporário para as Igrejas do Setor
-    if filtro_setor != "Todos": df_temp = df_original[df_original['Setor'] == filtro_setor]
-    else: df_temp = df_original
-    
-    # Filtro de Igreja
-    lista_igrejas = ["Todas"] + sorted([str(x) for x in df_temp['Localidade'].dropna().unique() if x not in IGREJAS_IGNORADAS])
-    filtro_igreja = st.sidebar.selectbox("Igreja", lista_igrejas)
-    
-    # Filtro de Atividade (Livro)
-    if 'Livro' in df_original.columns:
-        lista_atividades = ["Todas"] + sorted([str(x) for x in df_original['Livro'].dropna().unique()])
-        filtro_atividade = st.sidebar.selectbox("Atividade (Livro)", lista_atividades)
-    else:
-        filtro_atividade = "Todas"
-
     # APLICAR FILTROS AO DATAFRAME PRINCIPAL
     df = df_original.copy()
     if filtro_setor != "Todos": df = df[df['Setor'] == filtro_setor]

@@ -1,32 +1,66 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 from datetime import datetime
 import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-# --- CONFIGURAÇÕES DA PÁGINA ---
-st.set_page_config(page_title="Dashboard de Voluntários", layout="wide")
+st.set_page_config(
+    page_title="Dashboard de Voluntários",
+    page_icon="📊",
+    layout="wide"
+)
 
-# --- CONEXÃO COM O GOOGLE DRIVE (SERVICE ACCOUNT) ---
+SETORES = {
+    'Setor 1': [
+        'BR 14-2362 - ZONA 6 - MARINGÁ VELHO', 'BR 14-2601 - JARDIM ESPANHA', 
+        'BR 14-0603 - VILA OPERÁRIA', 'BR 14-0607 - VILA MORANGUEIRA', 
+        'BR 14-1115 - DISTRITO DE FLORIANO', 'BR 14-1118 - JARDIM VITÓRIA', 
+        'BR 14-1399 - JARDIM VERÔNICA', 'BR 14-1518 - PARQUE ITAIPU', 
+        'BR 14-1613 - PARQUE RESIDENCIAL AEROPORTO - 3ª PARTE', 
+        'BR 14-1614 - JARDIM CATEDRAL', 'BR 14-1686 - JARDIM UNIVERSO', 
+        'BR 14-2380 - JARDIM ORIENTAL - DIAMANTE'
+    ],
+    'Setor 2': [
+        'BR 14-0445 - DISTRITO DE IGUATEMI', 'BR 14-0606 - VILA SANTA IZABEL', 
+        'BR 14-1611 - PARQUE HORTÊNCIA - 1ª PARTE', 'BR 14-1615 - PARQUE DAS LARANJEIRAS', 
+        'BR 14-1748 - PARQUE AVENIDA', 'BR 14-1749 - JARDIM OLÍMPICO', 
+        'BR 14-2174 - JARDIM OURO COLA', 'BR 14-2296 - JARDIM MONTE REI', 
+        'BR 14-2446 - GLEBA PATRIMÔNIO MARINGÁ - JARDIM INDAIÁ'
+    ],
+    'Setor 3': [
+        'BR 14-0602 - VILA SANTO ANTÔNIO', 'BR 14-0605 - JARDIM ALVORADA', 
+        'BR 14-1116 - PARQUE RESIDENCIAL TUIUTI', 'BR 14-1400 - JARDIM LIBERDADE', 
+        'BR 14-1612 - JARDIM ALVORADA III - EBENEZER', 'BR 14-1635 - JARDIM PIATÃ', 
+        'BR 14-1636 - CONJUNTO REQUIÃO', 'BR 14-1970 - CONJUNTO RESIDENCIAL GUAIAPÓ', 
+        'BR 14-2402 - LOTEAMENTO SUMARÉ'
+    ]
+}
+
+ATIVIDADES_OBRIGATORIAS = ['LIMPEZA', 'GEM', 'PÁTIO']
+ATIVIDADES_ESPORADICAS = ['MANUTENÇÃO PREVENTIVA', 'ESPAÇO INFANTIL', 'COZINHA']
+IGREJAS_IGNORADAS = ['ADM - MARINGÁ - PR', 'PIA - MARINGÁ', 'BR 14-0601 - MARINGÁ - CENTRO']
+
+def classificar_setor(localidade):
+    for setor, locais in SETORES.items():
+        if localidade in locais:
+            return setor
+    return 'Não Classificado'
+
 @st.cache_resource
 def get_drive_service():
     try:
-        # Carrega o JSON com as credenciais do robô (Service Account)
         creds_json = st.secrets["GCP_CREDENTIALS"]
         creds_dict = json.loads(creds_json)
-        
-        # Autenticação profissional
         credentials = service_account.Credentials.from_service_account_info(
             creds_dict, 
             scopes=['https://www.googleapis.com/auth/drive.readonly']
         )
         return build('drive', 'v3', credentials=credentials)
     except Exception as e:
-        st.warning("⚠️ Credenciais do Google Drive (GCP_CREDENTIALS) não configuradas ou incorretas nos Secrets.")
         return None
 
-# --- FUNÇÃO PARA VASCULHAR O DRIVE ---
 @st.cache_data(ttl=3600)
 def fetch_google_drive_data(mes_ano, pasta_raiz_id="1vIBw5h1iuqGyRXBCrKl9kZORfVJzLlQ5"):
     service = get_drive_service()
@@ -34,44 +68,34 @@ def fetch_google_drive_data(mes_ano, pasta_raiz_id="1vIBw5h1iuqGyRXBCrKl9kZORfVJ
         return {}
     
     arquivos_encontrados = {}
-    
     try:
-        # 1. Busca a pasta do Mês/Ano (ex: 06-2026)
         query_mes = f"name = '{mes_ano}' and '{pasta_raiz_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         results_mes = service.files().list(q=query_mes, fields="files(id, name)").execute()
         pastas_mes = results_mes.get('files', [])
         
-        if not pastas_mes:
-            return {}
+        if not pastas_mes: return {}
         
         pasta_mes_id = pastas_mes[0]['id']
-        
-        # 2. Busca os Setores dentro do Mês
         query_setores = f"'{pasta_mes_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         results_setores = service.files().list(q=query_setores, fields="files(id, name)").execute()
         
         for setor in results_setores.get('files', []):
-            # 3. Busca as Igrejas dentro de cada Setor
             query_igrejas = f"'{setor['id']}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
             results_igrejas = service.files().list(q=query_igrejas, fields="files(id, name)").execute()
             
             for igreja in results_igrejas.get('files', []):
-                # 4. Busca os PDFs/Arquivos dentro da Igreja
                 query_arquivos = f"'{igreja['id']}' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed = false"
                 results_arquivos = service.files().list(q=query_arquivos, fields="files(name)").execute()
                 
                 lista_arquivos = [arq['name'].upper() for arq in results_arquivos.get('files', [])]
-                
-                # Extrai apenas o código da igreja (ex: "BR 14-0603") para garantir o cruzamento exato
                 codigo_igreja = igreja['name'].split(' - ')[0].strip()
                 arquivos_encontrados[codigo_igreja] = lista_arquivos
                 
     except Exception as e:
-        st.error(f"Erro ao acessar o Drive: {e}")
+        print(f"Erro no Drive: {e}")
         
     return arquivos_encontrados
 
-# --- FUNÇÃO PARA CARREGAR DADOS LOCAIS ---
 @st.cache_data
 def load_data(mes, ano):
     nome_arquivo = f"tabela {mes}-{ano}.xlsx"
@@ -86,56 +110,70 @@ def load_data(mes, ano):
 
     if 'Valor' in df.columns and df['Valor'].dtype == object:
         df['Valor'] = df['Valor'].astype(str).str.replace('.', '').str.replace(',', '.').astype(float)
-            
-    if 'Data' in df.columns:
-        df['Data'] = pd.to_datetime(df['Data'], errors='coerce', dayfirst=True)
 
     if 'Localidade' in df.columns:
         df['Setor'] = df['Localidade'].apply(classificar_setor)
         
     return df
 
-def classificar_setor(localidade):
-    localidade_upper = str(localidade).upper()
-    setor1 = ["MARINGÁ VELHO", "JARDIM ESPANHA", "DISTRITO DE FLORIANO", "VILA OPERÁRIA", "VILA MORANGUEIRA", "JARDIM VITÓRIA", "JARDIM VERÔNICA", "PARQUE ITAIPU", "AEROPORTO", "JARDIM CATEDRAL", "JARDIM UNIVERSO", "JARDIM ORIENTAL"]
-    setor2 = ["CÂNDIDO DE ABREU", "CASTELO BRANCO", "COLORADO", "FLORESTA", "ITAMBÉ", "MANDAGUAÇU", "NOVA ESPERANÇA", "SANTA FÉ", "SÃO JORGE DO IVAÍ", "ASTORGA", "DOUTOR CAMARGO", "MUNHOZ DE MELO"]
-    setor3 = ["CAMPO MOURÃO", "CIANORTE", "TERRA BOA", "UBIRATÃ", "PEABIRU", "ENGENHEIRO BELTRÃO", "ARARUNA", "TAPEJARA", "JUSSARA"]
-    
-    if any(igreja in localidade_upper for igreja in setor1): return "Setor 1"
-    if any(igreja in localidade_upper for igreja in setor2): return "Setor 2"
-    if any(igreja in localidade_upper for igreja in setor3): return "Setor 3"
-    return "Não Classificado"
+@st.cache_data
+def load_fechamento_data(mes, ano):
+    nome_arquivo = f"FECHAMENTO MENSAL {mes}-{ano}.txt"
+    try:
+        df_fechamento = pd.read_csv(nome_arquivo, sep='\t', skiprows=1, names=["Localidade", "Status"])
+        df_fechamento['Localidade'] = df_fechamento['Localidade'].str.strip()
+        df_fechamento['Status'] = df_fechamento['Status'].str.strip()
+        return df_fechamento
+    except FileNotFoundError:
+        return None
 
-# --- INTERFACE PRINCIPAL (CABEÇALHO E FILTROS) ---
+@st.cache_data
+def load_form_data():
+    try:
+        df_form = pd.read_excel('FORMULÁRIO QUALITATIVO 2026 (respostas).xlsx')
+        colunas_igreja = [c for c in df_form.columns if 'ESCOLHA A CASA DE ORAÇÃO' in str(c).upper()]
+        
+        def extrair_igreja(row):
+            for col in colunas_igreja:
+                if pd.notna(row[col]) and str(row[col]).strip() != "":
+                    return str(row[col]).strip()
+            return None
+            
+        if colunas_igreja:
+            df_form['Igreja_Identificada'] = df_form.apply(extrair_igreja, axis=1)
+        else:
+            df_form['Igreja_Identificada'] = None
+            
+        if 'MÊS' in df_form.columns: df_form['Mes_Submissao'] = pd.to_numeric(df_form['MÊS'], errors='coerce')
+        if 'ANO' in df_form.columns: df_form['Ano_Submissao'] = pd.to_numeric(df_form['ANO'], errors='coerce')
+
+        return df_form
+    except FileNotFoundError:
+        return None
+
 st.title("📊 Painel de Controle - Voluntários")
 
 with st.container():
-    st.markdown('<div class="filtros-container">', unsafe_allow_html=True)
     st.subheader("📅 Período de Análise")
-    col_data1, col_data2, col_data3 = st.columns(3)
-    with col_data1:
-        selected_mes = st.selectbox("Selecione o Mês", ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"], index=5)
-    with col_data2:
-        selected_ano = st.selectbox("Selecione o Ano", ["2025", "2026", "2027", "2028"], index=1)
-    st.markdown('</div>', unsafe_allow_html=True)
+    col_data1, col_data2 = st.columns(2)
+    selected_mes = col_data1.selectbox("Selecione o Mês", ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"], index=5)
+    selected_ano = col_data2.selectbox("Selecione o Ano", ["2025", "2026", "2027", "2028"], index=1)
 
 df = load_data(selected_mes, selected_ano)
+df_form = load_form_data()
+df_fechamento = load_fechamento_data(selected_mes, selected_ano)
 
 if df is not None:
-    # --- ANÁLISE DE PENDÊNCIAS (SIGA VS DRIVE) ---
-    st.subheader("⚠️ Controle de Atividades e Anexos (PDFs)")
+    st.markdown("---")
+    st.subheader("⚠️ Controle de Atividades e Anexos")
     
-    atividades_obrigatorias = ["LIMPEZA", "GEM", "PÁTIO"]
-    atividades_esporadicas = ["MANUTENÇÃO PREVENTIVA", "ESPAÇO INFANTIL", "COZINHA"]
+    # Mapeando os lançamentos baseando na coluna correta 'Livro'
+    if 'Livro' in df.columns:
+        siga_lancamentos = df.groupby(['Setor', 'Localidade'])['Livro'].unique().reset_index()
+    else:
+        st.error("A coluna 'Livro' não foi encontrada na planilha do SIGA.")
+        siga_lancamentos = pd.DataFrame(columns=['Setor', 'Localidade', 'Livro'])
     
-    # 1. Mapear o que foi lançado no SIGA
-    siga_lancamentos = df.groupby(['Setor', 'Localidade'])['Atividade'].unique().reset_index()
-    
-    # 2. Buscar no Drive
-    # 1. Mapear o que foi lançado no SIGA (Agora usando a coluna 'Livro')
-    siga_lancamentos = df.groupby(['Setor', 'Localidade'])['Livro'].unique().reset_index()
-    
-    # 2. Buscar no Drive
     arquivos_drive = fetch_google_drive_data(f"{selected_mes}-{selected_ano}")
     
     pendencias_siga = []
@@ -144,85 +182,167 @@ if df is not None:
     for index, row in siga_lancamentos.iterrows():
         setor = row['Setor']
         igreja_completa = row['Localidade']
+        if igreja_completa in IGREJAS_IGNORADAS: continue
+            
         codigo_igreja = str(igreja_completa).split(' - ')[0].strip()
-        
-        # Lendo os dados da coluna correta
         atividades_lancadas = [str(a).upper() for a in row['Livro']]
-        
         arquivos_desta_igreja = arquivos_drive.get(codigo_igreja, [])
         
-        # A) Verifica Falta no SIGA (Apenas Limpeza, GEM, Pátio)
+        # 1. Verifica Falta no SIGA (Obrigatórias + Esporádicas)
         falta_siga = []
-        for atv in atividades_obrigatorias:
+        for atv in ATIVIDADES_OBRIGATORIAS:
             if not any(atv in lancado for lancado in atividades_lancadas):
                 falta_siga.append(atv)
                 
-        # Esporádicas: Se não está no SIGA, olha no Drive. Se também não está no Drive, cobra.
-        for atv_esp in atividades_esporadicas:
+        for atv_esp in ATIVIDADES_ESPORADICAS:
             if not any(atv_esp in lancado for lancado in atividades_lancadas):
-                if atv_esp == "MANUTENÇÃO PREVENTIVA" and not any('MAN' in arq for arq in arquivos_desta_igreja):
-                    falta_siga.append(atv_esp)
-                elif atv_esp == "ESPAÇO INFANTIL" and not any(x in arq for arq in arquivos_desta_igreja for x in ['INFA', 'EBI', 'E.B.I']):
-                    falta_siga.append(atv_esp)
-                elif atv_esp == "COZINHA" and not any('COZINHA' in arq for arq in arquivos_desta_igreja):
-                    falta_siga.append(atv_esp)
+                if atv_esp == "MANUTENÇÃO PREVENTIVA" and any('MAN' in arq for arq in arquivos_desta_igreja): falta_siga.append(atv_esp)
+                elif atv_esp == "ESPAÇO INFANTIL" and any(x in arq for arq in arquivos_desta_igreja for x in ['INFA', 'EBI', 'E.B.I']): falta_siga.append(atv_esp)
+                elif atv_esp == "COZINHA" and any('COZINHA' in arq for arq in arquivos_desta_igreja): falta_siga.append(atv_esp)
 
         if falta_siga:
             pendencias_siga.append({'Setor': setor, 'Igreja': igreja_completa, 'Falta Lançar no Sistema': ", ".join(falta_siga)})
 
-        # B) Verifica Falta de PDF (Apenas para o que FOI lançado no SIGA)
+        # 2. Verifica Falta de PDF no Drive
         falta_drive = []
         for lancado in atividades_lancadas:
             encontrou = False
-            if 'ESTAC' in lancado or 'PÁTIO' in lancado or 'PATIO' in lancado:
-                encontrou = any(('ESTAC' in arq or 'PÁTIO' in arq or 'PATIO' in arq) and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
-            elif 'GEM' in lancado or 'G.E.M' in lancado:
-                encontrou = any(('GEM' in arq or 'G.E.M' in arq) and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
-            elif 'MPEZA' in lancado or 'MPESA' in lancado:
-                encontrou = any(('MPEZA' in arq or 'MPESA' in arq) and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
-            elif 'COZINHA' in lancado:
-                encontrou = any('COZINHA' in arq and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
-            elif 'INFA' in lancado or 'EBI' in lancado or 'E.B.I' in lancado:
-                encontrou = any(('INFA' in arq or 'EBI' in arq or 'E.B.I' in arq) and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
-            elif 'MAN' in lancado:
-                encontrou = any('MAN' in arq and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
-            else:
-                encontrou = True # Atividades não rastreadas não cobram anexo
+            if 'ESTAC' in lancado or 'PÁTIO' in lancado or 'PATIO' in lancado: encontrou = any(('ESTAC' in arq or 'PÁTIO' in arq or 'PATIO' in arq) and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
+            elif 'GEM' in lancado or 'G.E.M' in lancado: encontrou = any(('GEM' in arq or 'G.E.M' in arq) and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
+            elif 'MPEZA' in lancado or 'MPESA' in lancado: encontrou = any(('MPEZA' in arq or 'MPESA' in arq) and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
+            elif 'COZINHA' in lancado: encontrou = any('COZINHA' in arq and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
+            elif 'INFA' in lancado or 'EBI' in lancado or 'E.B.I' in lancado: encontrou = any(('INFA' in arq or 'EBI' in arq or 'E.B.I' in arq) and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
+            elif 'MAN' in lancado: encontrou = any('MAN' in arq and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
+            else: encontrou = True
 
-            if not encontrou and lancado in atividades_obrigatorias + atividades_esporadicas:
+            if not encontrou and any(base in lancado for base in ATIVIDADES_OBRIGATORIAS + ATIVIDADES_ESPORADICAS):
                 falta_drive.append(lancado)
 
         if falta_drive:
             pendencias_drive.append({'Setor': setor, 'Igreja': igreja_completa, 'Falta Anexar PDF no Drive': ", ".join(falta_drive)})
 
-    # EXIBIÇÃO EM SANFONA (EXPANDERS)
     with st.expander(f"⚠️ {len(pendencias_siga)} congregações com pendências no Sistema (SIGA)"):
-        if pendencias_siga:
-            st.dataframe(pd.DataFrame(pendencias_siga), use_container_width=True, hide_index=True)
-        else:
-            st.success("Tudo certo! Todas as igrejas lançaram as atividades obrigatórias.")
+        if pendencias_siga: st.dataframe(pd.DataFrame(pendencias_siga), use_container_width=True, hide_index=True)
+        else: st.success("Tudo certo no SIGA!")
 
-    with st.expander(f"📁 {len(pendencias_drive)} congregações com pendências de anexo no fechamento mensal"):
-        if pendencias_drive:
-            st.dataframe(pd.DataFrame(pendencias_drive), use_container_width=True, hide_index=True)
-        else:
-            st.success("Todos os lançamentos possuem arquivo correspondente no Google Drive!")
+    with st.expander(f"📁 {len(pendencias_drive)} Pendencia de anexo no fechamento mensal"):
+        if pendencias_drive: st.dataframe(pd.DataFrame(pendencias_drive), use_container_width=True, hide_index=True)
+        else: st.success("Todos os lançamentos possuem arquivo no Drive!")
 
-    # --- AUDITORIA DE ARQUIVOS (DRIVE) ---
     st.markdown("---")
-    with st.expander("🔍 Auditoria de Arquivos (Ver todos os arquivos lidos no Google Drive)"):
-        st.info("O painel salva os arquivos na memória por 1 hora. Se você apagou ou enviou um arquivo no Drive AGORA, clique no botão abaixo para forçar a atualização imediata.")
-        if st.button("🔄 Forçar Atualização do Drive"):
+    st.subheader("📂 Status de Fechamento Mensal")
+    if df_fechamento is not None:
+        fechamento_filtrado = df_fechamento[~df_fechamento['Localidade'].isin(IGREJAS_IGNORADAS)].copy()
+        fechamento_filtrado['Setor'] = fechamento_filtrado['Localidade'].apply(classificar_setor)
+        igrejas_abertas = fechamento_filtrado[fechamento_filtrado['Status'].str.upper() == 'ABERTO']
+        
+        with st.expander(f"⚠️ {len(igrejas_abertas)} igrejas com o status ABERTO"):
+            if not igrejas_abertas.empty: st.dataframe(igrejas_abertas[['Setor', 'Localidade', 'Status']], use_container_width=True, hide_index=True)
+            else: st.success("Todos os fechamentos avaliados estão ENCERRADOS.")
+    else:
+        st.info("Arquivo de fechamento não encontrado para este mês.")
+
+    st.markdown("---")
+    st.subheader("📋 Pendências Formulário Qualitativo")
+    if df_form is not None:
+        mes_num, ano_num = int(selected_mes), int(selected_ano)
+        df_form_mes = df_form[(df_form['Mes_Submissao'] == mes_num) & (df_form['Ano_Submissao'] == ano_num)]
+        igrejas_que_responderam = df_form_mes['Igreja_Identificada'].dropna().unique().tolist()
+        
+        todas_igrejas = [igreja for lista in SETORES.values() for igreja in lista if igreja not in IGREJAS_IGNORADAS]
+        faltam_form = [ig for ig in todas_igrejas if ig not in igrejas_que_responderam]
+        
+        with st.expander(f"⚠️ {len(faltam_form)} congregações não enviaram o formulário"):
+            if faltam_form:
+                df_faltam = pd.DataFrame(faltam_form, columns=["Igreja"])
+                df_faltam['Setor'] = df_faltam['Igreja'].apply(classificar_setor)
+                st.dataframe(df_faltam[['Setor', 'Igreja']], use_container_width=True, hide_index=True)
+            else: st.success("Todas as congregações enviaram o formulário!")
+
+        # Validação de atividades analisadas no forms (agrupando por igreja)
+        colunas_analisadas = [c for c in df_form_mes.columns if 'ASSINALAR AS ATIVIDADES' in str(c).upper()]
+        pendencias_ativ_form = []
+        
+        if colunas_analisadas:
+            for igreja in igrejas_que_responderam:
+                # 1. Descobrir o que era obrigatório para essa igreja analisar (lançado no siga ou com pdf)
+                atividades_exigidas = set()
+                df_igreja_siga = df[df['Localidade'] == igreja]
+                
+                if 'Livro' in df_igreja_siga.columns:
+                    for atv in df_igreja_siga['Livro'].dropna(): atividades_exigidas.add(str(atv).upper())
+                
+                cod_ig = str(igreja).split(' - ')[0].strip()
+                arqs_ig = arquivos_drive.get(cod_ig, [])
+                if any('ESTAC' in a or 'PÁTIO' in a or 'PATIO' in a for a in arqs_ig): atividades_exigidas.add("PÁTIO")
+                if any('GEM' in a or 'G.E.M' in a for a in arqs_ig): atividades_exigidas.add("GEM")
+                if any('MPEZA' in a or 'MPESA' in a for a in arqs_ig): atividades_exigidas.add("LIMPEZA")
+                if any('COZINHA' in a for a in arqs_ig): atividades_exigidas.add("COZINHA")
+                if any('INFA' in a or 'EBI' in a for a in arqs_ig): atividades_exigidas.add("ESPAÇO INFANTIL")
+                if any('MAN' in a for a in arqs_ig): atividades_exigidas.add("MANUTENÇÃO PREVENTIVA")
+
+                # 2. Descobrir o que a igreja marcou (juntando todas as linhas do mês)
+                respostas_igreja = df_form_mes[df_form_mes['Igreja_Identificada'] == igreja]
+                texto_marcado = " ".join([str(x).upper() for col in colunas_analisadas for x in respostas_igreja[col].dropna().tolist()])
+                
+                # 3. Comparar
+                falta_marcar = []
+                for atv_req in atividades_exigidas:
+                    # Filtra para buscar apenas as atividades padrão
+                    for atv_padrao in ATIVIDADES_OBRIGATORIAS + ATIVIDADES_ESPORADICAS:
+                        if atv_padrao in atv_req and atv_padrao not in texto_marcado:
+                            falta_marcar.append(atv_padrao)
+                            
+                falta_marcar = list(set(falta_marcar)) # Remove duplicatas
+                if falta_marcar:
+                    pendencias_ativ_form.append({'Setor': classificar_setor(igreja), 'Igreja': igreja, 'Faltou analisar no Form': ", ".join(falta_marcar)})
+
+        with st.expander(f"⚠️ {len(pendencias_ativ_form)} congregações com atividades faltando no preenchimento do Form"):
+            if pendencias_ativ_form: st.dataframe(pd.DataFrame(pendencias_ativ_form), use_container_width=True, hide_index=True)
+            else: st.success("Todas as atividades lançadas foram analisadas nos formulários!")
+
+        # Gráfico de Taxa de Erros Qualitativos (sem legenda lateral)
+        erros_por_atividade = []
+        for ativ in ATIVIDADES_OBRIGATORIAS + ATIVIDADES_ESPORADICAS:
+            erros_totais = 0
+            col_alvo = [c for c in df_form_mes.columns if ativ.upper() in str(c).upper() and ('RASURA' in str(c).upper() or 'ERRO' in str(c).upper() or 'BRANCO' in str(c).upper())]
+            for col in col_alvo: erros_totais += pd.to_numeric(df_form_mes[col], errors='coerce').sum()
+            
+            lancamentos_totais = df[df['Livro'].astype(str).str.upper().str.contains(ativ.upper(), na=False)].shape[0] if 'Livro' in df.columns else 0
+            taxa = (erros_totais / lancamentos_totais * 100) if lancamentos_totais > 0 else 0
+            erros_por_atividade.append({'Atividade': ativ, 'Taxa (%)': taxa, 'Erros': erros_totais, 'Lançamentos': lancamentos_totais})
+            
+        fig_erros = px.bar(
+            pd.DataFrame(erros_por_atividade), x='Atividade', y='Taxa (%)',
+            title="Taxa de Erro vs Lançamentos (Formulário Qualitativo)",
+            hover_data=['Erros', 'Lançamentos'], text_auto='.1f',
+            color='Taxa (%)', color_continuous_scale="Reds"
+        )
+        fig_erros.update_layout(coloraxis_showscale=False) # Remove a legenda de cor lateral
+        st.plotly_chart(fig_erros, use_container_width=True)
+
+    st.markdown("---")
+    with st.expander("🔍 Auditoria de Arquivos (Ver PDFs lidos no Google Drive)"):
+        if st.button("🔄 Forçar Atualização do Drive (Limpar Cache)"):
             fetch_google_drive_data.clear()
             st.rerun()
             
         if arquivos_drive:
-            auditoria_list = []
-            for ig, arqs in arquivos_drive.items():
-                auditoria_list.append({"Código Igreja": ig, "Arquivos Encontrados": ", ".join(arqs) if arqs else "Pasta Vazia"})
+            auditoria_list = [{"Código Igreja": ig, "Arquivos Encontrados": ", ".join(arqs) if arqs else "Pasta Vazia"} for ig, arqs in arquivos_drive.items()]
             st.dataframe(pd.DataFrame(auditoria_list), use_container_width=True, hide_index=True)
         else:
-            st.warning("Nenhum arquivo encontrado. O Mês/Ano pode estar sem pastas no Drive ou as credenciais não foram carregadas.")
+            st.warning("Nenhum arquivo encontrado. O Mês/Ano pode estar sem pastas no Drive.")
+
+    st.markdown("---")
+    st.subheader("📌 Métricas Gerais Financeiras")
+    total_registros = len(df)
+    total_valor = df['Valor'].sum() if 'Valor' in df.columns else 0
+    media_valor = df['Valor'].mean() if 'Valor' in df.columns and total_registros > 0 else 0
+
+    col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
+    col_kpi1.metric("Total de Lançamentos", f"{total_registros}")
+    col_kpi2.metric("Valor Total (R$)", f"R$ {total_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
+    col_kpi3.metric("Ticket Médio (R$)", f"R$ {media_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
 
 else:
     st.error(f"⚠️ Base de dados não encontrada: 'tabela {selected_mes}-{selected_ano}.xlsx'.")

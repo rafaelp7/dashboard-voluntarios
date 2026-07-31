@@ -132,6 +132,10 @@ if df is not None:
     siga_lancamentos = df.groupby(['Setor', 'Localidade'])['Atividade'].unique().reset_index()
     
     # 2. Buscar no Drive
+    # 1. Mapear o que foi lançado no SIGA (Agora usando a coluna 'Livro')
+    siga_lancamentos = df.groupby(['Setor', 'Localidade'])['Livro'].unique().reset_index()
+    
+    # 2. Buscar no Drive
     arquivos_drive = fetch_google_drive_data(f"{selected_mes}-{selected_ano}")
     
     pendencias_siga = []
@@ -141,7 +145,9 @@ if df is not None:
         setor = row['Setor']
         igreja_completa = row['Localidade']
         codigo_igreja = str(igreja_completa).split(' - ')[0].strip()
-        atividades_lancadas = [str(a).upper() for a in row['Atividade']]
+        
+        # Lendo os dados da coluna correta
+        atividades_lancadas = [str(a).upper() for a in row['Livro']]
         
         arquivos_desta_igreja = arquivos_drive.get(codigo_igreja, [])
         

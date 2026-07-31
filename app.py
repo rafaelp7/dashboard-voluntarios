@@ -6,9 +6,66 @@ from datetime import datetime
 import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+import io
+from fpdf import FPDF # Importação para gerar os PDFs
 
 # --- CONFIGURAÇÕES DA PÁGINA ---
 st.set_page_config(page_title="Dashboard de Voluntários", page_icon="📊", layout="wide")
+
+# --- FUNÇÃO GERADORA DE PDF ---
+def gerar_pdf(titulo_relatorio, sessoes_dados):
+    """
+    Gera um PDF a partir de uma lista de tuplas (Titulo_da_Sessao, DataFrame).
+    """
+    pdf = FPDF(orientation='L') # Paisagem para caber mais colunas
+    pdf.add_page()
+    
+    # Título Principal
+    pdf.set_font("Arial", "B", 16)
+    # Tratamento de encoding para acentos no FPDF
+    titulo_seguro = str(titulo_relatorio).encode('latin-1', 'replace').decode('latin-1')
+    pdf.cell(0, 10, titulo_seguro, 0, 1, "C")
+    pdf.ln(5)
+
+    for subtitulo, df in sessoes_dados:
+        pdf.set_font("Arial", "B", 12)
+        sub_seguro = str(subtitulo).encode('latin-1', 'replace').decode('latin-1')
+        pdf.cell(0, 10, sub_seguro, 0, 1)
+        pdf.set_font("Arial", "", 10)
+
+        if df is not None and not df.empty:
+            # Cálculos de largura das colunas
+            colunas = list(df.columns)
+            largura_util = pdf.w - 20 # 10 margem de cada lado
+            col_width = largura_util / len(colunas)
+            line_height = pdf.font_size * 2
+
+            # Cabeçalho da Tabela
+            pdf.set_font("Arial", "B", 9)
+            for col in colunas:
+                txt = str(col).encode('latin-1', 'replace').decode('latin-1')
+                pdf.cell(col_width, line_height, txt[:30], border=1)
+            pdf.ln(line_height)
+
+            # Linhas da Tabela
+            pdf.set_font("Arial", "", 8)
+            for _, row in df.iterrows():
+                for item in row:
+                    txt = str(item).encode('latin-1', 'replace').decode('latin-1')
+                    pdf.cell(col_width, line_height, txt[:45], border=1)
+                pdf.ln(line_height)
+        else:
+            pdf.cell(0, 10, "Nenhuma pendencia ou dado encontrado para esta sessao.", 0, 1)
+        pdf.ln(10)
+
+    # Exporta em bytes para o st.download_button
+    try:
+        # Tenta o método fpdf2 mais moderno
+        return bytes(pdf.output())
+    except TypeError:
+        # Fallback para fpdf mais antigo
+        return pdf.output(dest='S').encode('latin-1')
+
 
 # --- DICIONÁRIOS E CONSTANTES ---
 SETORES = {
@@ -172,16 +229,16 @@ with st.container(border=True):
             is_selected = (st.session_state.filtro_setor == setor_nome)
             if cols_setores[i].button(setor_nome, use_container_width=True, type="primary" if is_selected else "secondary", key=f"btn_{setor_nome}"):
                 st.session_state.filtro_setor = setor_nome
-                st.session_state.filtro_igreja = 'Todas'  # Reseta a igreja selecionada ao trocar de setor
+                st.session_state.filtro_igreja = 'Todas'
                 st.rerun()
 
-        # 2. BOTÕES DE IGREJA (SÓ APARECE SE UM SETOR ESPECÍFICO FOR SELECIONADO)
+        # 2. BOTÕES DE IGREJA
         if st.session_state.filtro_setor != "Todos":
             df_temp = df_original[df_original['Setor'] == st.session_state.filtro_setor]
             lista_igrejas = ["Todas"] + sorted([str(x) for x in df_temp['Localidade'].dropna().unique() if x not in IGREJAS_IGNORADAS])
 
             st.markdown("**Selecione a Igreja:**")
-            cols_por_linha = 4 # Exibir em grade com 4 botões por linha para estética
+            cols_por_linha = 4 
             
             for i in range(0, len(lista_igrejas), cols_por_linha):
                 cols_ig = st.columns(cols_por_linha)
@@ -190,23 +247,19 @@ with st.container(border=True):
                     if idx < len(lista_igrejas):
                         ig_nome = lista_igrejas[idx]
                         is_selected = (st.session_state.filtro_igreja == ig_nome)
-                        # Abrevia nomes muito longos caso necessário
                         btn_label = ig_nome if len(ig_nome) < 40 else ig_nome[:37] + "..." 
                         if cols_ig[j].button(btn_label, use_container_width=True, type="primary" if is_selected else "secondary", key=f"btn_ig_{idx}"):
                             st.session_state.filtro_igreja = ig_nome
                             st.rerun()
         else:
-            # Garante que as igrejas sejam resetadas caso volte para 'Todos'
             st.session_state.filtro_igreja = 'Todas'
 
-        # 3. BOTÕES DE ATIVIDADE (DENTRO DO EXPANDER)
+        # 3. BOTÕES DE ATIVIDADE
         if 'Livro' in df_original.columns:
             with st.expander("🛠️ Filtrar por Atividade"):
                 lista_atividades = ["Todas"] + sorted([str(x) for x in df_original['Livro'].dropna().unique()])
-                
-                # Até 6 atividades por linha
                 cols_por_linha_atv = min(len(lista_atividades), 6)
-                if cols_por_linha_atv == 0: cols_por_linha_atv = 1 # Proteção adicional
+                if cols_por_linha_atv == 0: cols_por_linha_atv = 1 
                 
                 for i in range(0, len(lista_atividades), cols_por_linha_atv):
                     cols_atv = st.columns(cols_por_linha_atv)
@@ -219,7 +272,7 @@ with st.container(border=True):
                                 st.session_state.filtro_atividade = ativ_nome
                                 st.rerun()
 
-# Atribuição dos filtros salvos na sessão para o restante do código
+# Atribuição dos filtros
 filtro_setor = st.session_state.filtro_setor
 filtro_igreja = st.session_state.filtro_igreja
 filtro_atividade = st.session_state.filtro_atividade
@@ -232,8 +285,6 @@ if df_original is not None:
     if filtro_atividade != "Todas" and 'Livro' in df.columns: df = df[df['Livro'].astype(str) == filtro_atividade]
 
     st.markdown("---")
-    
-    # --- PROCESSAMENTO DE PENDÊNCIAS (SIGA VS DRIVE) ---
     st.subheader("⚠️ Controle de Atividades e Anexos")
     
     if 'Livro' in df.columns:
@@ -285,42 +336,64 @@ if df_original is not None:
 
         if falta_drive: pendencias_drive.append({'Setor': setor, 'Igreja': igreja_completa, 'Falta Anexar PDF no Drive': ", ".join(falta_drive)})
 
+    df_pendencias_siga = pd.DataFrame(pendencias_siga) if pendencias_siga else pd.DataFrame()
+    df_pendencias_drive = pd.DataFrame(pendencias_drive) if pendencias_drive else pd.DataFrame()
+
     # EXIBIÇÃO: PENDÊNCIAS SISTEMA
     with st.expander(f"⚠️ {len(pendencias_siga)} congregações com pendências no Sistema (SIGA)"):
-        if pendencias_siga: st.dataframe(pd.DataFrame(pendencias_siga), use_container_width=True, hide_index=True)
-        else: st.success("Tudo certo no SIGA para os filtros selecionados!")
+        if not df_pendencias_siga.empty: 
+            st.dataframe(df_pendencias_siga, use_container_width=True, hide_index=True)
+            pdf_bytes = gerar_pdf("Pendencias no Sistema (SIGA)", [("Pendências", df_pendencias_siga)])
+            st.download_button("📥 Gerar PDF (Pendências SIGA)", data=pdf_bytes, file_name="Pendencias_SIGA.pdf", mime="application/pdf")
+        else: 
+            st.success("Tudo certo no SIGA para os filtros selecionados!")
 
     # EXIBIÇÃO: PENDÊNCIAS DRIVE
     with st.expander(f"📁 {len(pendencias_drive)} Pendencia de anexo no fechamento mensal"):
-        if pendencias_drive: st.dataframe(pd.DataFrame(pendencias_drive), use_container_width=True, hide_index=True)
-        else: st.success("Todos os lançamentos filtrados possuem arquivo correspondente no Drive!")
+        if not df_pendencias_drive.empty: 
+            st.dataframe(df_pendencias_drive, use_container_width=True, hide_index=True)
+            pdf_bytes = gerar_pdf("Pendencia de anexo no fechamento", [("Pendências Drive", df_pendencias_drive)])
+            st.download_button("📥 Gerar PDF (Pendências Drive)", data=pdf_bytes, file_name="Pendencias_Drive.pdf", mime="application/pdf")
+        else: 
+            st.success("Todos os lançamentos filtrados possuem arquivo correspondente no Drive!")
 
     # --- FECHAMENTO MENSAL ---
     st.markdown("---")
     st.subheader("📂 Status de Fechamento Mensal")
+    
+    df_igrejas_abertas = pd.DataFrame()
     if df_fechamento is not None:
         fechamento_filtrado = df_fechamento[~df_fechamento['Localidade'].isin(IGREJAS_IGNORADAS)].copy()
         fechamento_filtrado['Setor'] = fechamento_filtrado['Localidade'].apply(classificar_setor)
         
-        # Aplica o filtro da tela também no fechamento
         if filtro_setor != "Todos": fechamento_filtrado = fechamento_filtrado[fechamento_filtrado['Setor'] == filtro_setor]
         if filtro_igreja != "Todas": fechamento_filtrado = fechamento_filtrado[fechamento_filtrado['Localidade'] == filtro_igreja]
             
         igrejas_abertas = fechamento_filtrado[fechamento_filtrado['Status'].str.upper() == 'ABERTO']
+        if not igrejas_abertas.empty:
+            df_igrejas_abertas = igrejas_abertas[['Setor', 'Localidade', 'Status']]
+            
         with st.expander(f"⚠️ {len(igrejas_abertas)} igrejas com o status ABERTO"):
-            if not igrejas_abertas.empty: st.dataframe(igrejas_abertas[['Setor', 'Localidade', 'Status']], use_container_width=True, hide_index=True)
-            else: st.success("Todos os fechamentos avaliados estão ENCERRADOS.")
+            if not df_igrejas_abertas.empty: 
+                st.dataframe(df_igrejas_abertas, use_container_width=True, hide_index=True)
+                pdf_bytes = gerar_pdf("Status de Fechamento: ABERTO", [("Igrejas Abertas", df_igrejas_abertas)])
+                st.download_button("📥 Gerar PDF (Fechamento Aberto)", data=pdf_bytes, file_name="Fechamentos_Abertos.pdf", mime="application/pdf")
+            else: 
+                st.success("Todos os fechamentos avaliados estão ENCERRADOS.")
     else: st.info("Arquivo de fechamento não encontrado para este mês.")
 
     # --- FORMULÁRIO QUALITATIVO ---
     st.markdown("---")
     st.subheader("📋 Pendências Formulário Qualitativo")
+    
+    df_faltam = pd.DataFrame()
+    df_pendencias_ativ_form = pd.DataFrame()
+    
     if df_form is not None:
         mes_num, ano_num = int(selected_mes), int(selected_ano)
         df_form_mes = df_form[(df_form['Mes_Submissao'] == mes_num) & (df_form['Ano_Submissao'] == ano_num)]
         igrejas_que_responderam = df_form_mes['Igreja_Identificada'].dropna().unique().tolist()
         
-        # Filtra as igrejas baseadas na tela
         igrejas_alvo = df['Localidade'].unique().tolist() if filtro_igreja == "Todas" else [filtro_igreja]
         faltam_form = [ig for ig in igrejas_alvo if ig not in igrejas_que_responderam and ig not in IGREJAS_IGNORADAS]
         
@@ -328,10 +401,14 @@ if df_original is not None:
             if faltam_form:
                 df_faltam = pd.DataFrame(faltam_form, columns=["Igreja"])
                 df_faltam['Setor'] = df_faltam['Igreja'].apply(classificar_setor)
-                st.dataframe(df_faltam[['Setor', 'Igreja']], use_container_width=True, hide_index=True)
-            else: st.success("Todas as congregações filtradas enviaram o formulário!")
+                df_faltam = df_faltam[['Setor', 'Igreja']] # Reordenando
+                st.dataframe(df_faltam, use_container_width=True, hide_index=True)
+                pdf_bytes = gerar_pdf("Igrejas que nao enviaram o Formulario", [("Faltam Formularios", df_faltam)])
+                st.download_button("📥 Gerar PDF (Sem Formulário)", data=pdf_bytes, file_name="Faltam_Formularios.pdf", mime="application/pdf")
+            else: 
+                st.success("Todas as congregações filtradas enviaram o formulário!")
 
-        # Validação de atividades analisadas no forms (agrupando por igreja)
+        # Validação de atividades analisadas no forms
         colunas_analisadas = [c for c in df_form_mes.columns if 'ASSINALAR AS ATIVIDADES' in str(c).upper()]
         pendencias_ativ_form = []
         
@@ -365,9 +442,15 @@ if df_original is not None:
                 falta_marcar = list(set(falta_marcar))
                 if falta_marcar: pendencias_ativ_form.append({'Setor': classificar_setor(igreja), 'Igreja': igreja, 'Faltou analisar no Form': ", ".join(falta_marcar)})
 
+        df_pendencias_ativ_form = pd.DataFrame(pendencias_ativ_form) if pendencias_ativ_form else pd.DataFrame()
+        
         with st.expander(f"⚠️ {len(pendencias_ativ_form)} congregações com atividades faltando no preenchimento do Form"):
-            if pendencias_ativ_form: st.dataframe(pd.DataFrame(pendencias_ativ_form), use_container_width=True, hide_index=True)
-            else: st.success("Todas as atividades lançadas foram analisadas nos formulários!")
+            if not df_pendencias_ativ_form.empty: 
+                st.dataframe(df_pendencias_ativ_form, use_container_width=True, hide_index=True)
+                pdf_bytes = gerar_pdf("Atividades Faltando no Form", [("Pendências de Preenchimento", df_pendencias_ativ_form)])
+                st.download_button("📥 Gerar PDF (Atividades Faltando)", data=pdf_bytes, file_name="Atividades_Faltando_Form.pdf", mime="application/pdf")
+            else: 
+                st.success("Todas as atividades lançadas foram analisadas nos formulários!")
 
         # GRÁFICO QUALITATIVO
         erros_por_atividade = []
@@ -394,16 +477,30 @@ if df_original is not None:
     col_kpi1.metric("Lançamentos (Filtro Atual)", f"{total_registros}")
     col_kpi2.metric("Valor Total (R$)", f"R$ {total_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
     col_kpi3.metric("Ticket Médio (R$)", f"R$ {media_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
-
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    with st.expander("🔍 Auditoria de Arquivos (Ver todos os arquivos lidos no Google Drive)"):
-        st.info("O painel salva os arquivos na memória por 1 hora (Cache). Clique no botão abaixo para forçar a atualização imediata.")
-        if st.button("🔄 Forçar Atualização do Drive"):
-            fetch_google_drive_data.clear()
-            st.rerun()
-        if arquivos_drive:
-            auditoria_list = [{"Código Igreja": ig, "Arquivos Encontrados": ", ".join(arqs) if arqs else "Pasta Vazia"} for ig, arqs in arquivos_drive.items()]
-            st.dataframe(pd.DataFrame(auditoria_list), use_container_width=True, hide_index=True)
-        else: st.warning("Nenhum arquivo encontrado ou permissão pendente.")
+    
+    # --- RELATÓRIO GERAL (SUBSTITUI A AUDITORIA ANTIGA) ---
+    st.markdown("---")
+    st.subheader("📑 Geração de Relatório Consolidado (Tudo)")
+    st.info("O arquivo gerado abaixo conterá todas as tabelas e métricas pendentes relativas aos filtros selecionados acima.")
+    
+    # Montando a lista de seções para o PDF Geral
+    sessoes_gerais = [
+        ("Pendencias no Sistema (SIGA)", df_pendencias_siga),
+        ("Pendencia de anexo no fechamento", df_pendencias_drive),
+        ("Fechamentos Mensais com status ABERTO", df_igrejas_abertas),
+        ("Igrejas que não enviaram o Formulario", df_faltam),
+        ("Atividades faltando no preenchimento do Form", df_pendencias_ativ_form)
+    ]
+    
+    pdf_geral_bytes = gerar_pdf(f"Relatorio Geral de Pendencias - {selected_mes}/{selected_ano}", sessoes_gerais)
+    
+    st.download_button(
+        label="📥 BAixar Relatório Geral em PDF",
+        data=pdf_geral_bytes,
+        file_name=f"Relatorio_Geral_{selected_mes}_{selected_ano}.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+        type="primary"
+    )
 
 else: st.error(f"⚠️ Base de dados não encontrada: 'tabela {selected_mes}-{selected_ano}.xlsx'.")

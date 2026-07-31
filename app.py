@@ -266,6 +266,77 @@ if df is not None:
             st.dataframe(df_faltam_form[['Setor', 'Igreja']], use_container_width=True, hide_index=True)
         else:
             st.success(f"✅ Formulários em dia ({mes_selecionado_nome})!")
+
+        # --- NOVO GRÁFICO DE QUALIDADE ---
+        st.subheader("📊 Análise de Qualidade (Taxa de Erros por Atividade)")
+        
+        # Prepara base da tabela principal (df) filtrada pela competência, setor e igreja
+        df_base_grafico = df.copy()
+        if 'Data' in df_base_grafico.columns:
+            df_base_grafico = df_base_grafico[
+                (df_base_grafico['Data'].dt.month == mes_selecionado_num) & 
+                (df_base_grafico['Data'].dt.year == ano_selecionado)
+            ]
+        if selected_setor != "Todos":
+            df_base_grafico = df_base_grafico[df_base_grafico['Setor'] == selected_setor]
+        if selected_localidade != "Todas":
+            df_base_grafico = df_base_grafico[df_base_grafico['Localidade'] == selected_localidade]
+            
+        # Prepara base do formulário filtrada por setor e igreja
+        df_form_grafico = df_form_filtrado.copy()
+        if selected_setor != "Todos":
+            igrejas_do_setor_selecionado = SETORES.get(selected_setor, [])
+            df_form_grafico = df_form_grafico[df_form_grafico['Igreja_Identificada'].isin(igrejas_do_setor_selecionado)]
+        if selected_localidade != "Todas":
+            df_form_grafico = df_form_grafico[df_form_grafico['Igreja_Identificada'] == selected_localidade]
+            
+        dados_qualidade = []
+        for atividade in ATIVIDADES_OBRIGATORIAS:
+            # 1. Quantidade de Lançamentos da atividade
+            qtd_lancamentos = 0
+            if 'Livro' in df_base_grafico.columns:
+                qtd_lancamentos = len(df_base_grafico[df_base_grafico['Livro'].astype(str).str.upper().str.contains(atividade)])
+                
+            # 2. Quantidade de Erros no Formulário
+            qtd_erros = 0
+            for col in df_form_grafico.columns:
+                col_upper = str(col).upper()
+                # Verifica se a coluna cita a atividade e palavras indicativas de erro
+                if atividade in col_upper and any(err in col_upper for err in ['RASURA', 'BORRÕ', 'ERRO', 'HORÁRIO', 'BRANCO']):
+                    qtd_erros += pd.to_numeric(df_form_grafico[col], errors='coerce').fillna(0).sum()
+                    
+            # 3. Cálculo da Taxa (%)
+            porcentagem = (qtd_erros / qtd_lancamentos * 100) if qtd_lancamentos > 0 else 0.0
+            
+            dados_qualidade.append({
+                'Atividade': atividade,
+                'Lançamentos': qtd_lancamentos,
+                'Erros': int(qtd_erros),
+                'Taxa de Erro (%)': round(porcentagem, 2)
+            })
+            
+        df_qualidade = pd.DataFrame(dados_qualidade)
+        
+        if df_qualidade['Erros'].sum() > 0 or df_qualidade['Lançamentos'].sum() > 0:
+            fig_qualidade = px.bar(
+                df_qualidade, 
+                x='Atividade', 
+                y='Taxa de Erro (%)', 
+                text='Taxa de Erro (%)',
+                hover_data=['Erros', 'Lançamentos'],
+                labels={'Taxa de Erro (%)': '% de Erros (Erros / Lançamentos)'},
+                color='Taxa de Erro (%)',
+                color_continuous_scale='Reds'
+            )
+            fig_qualidade.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
+            fig_qualidade.update_layout(
+                yaxis=dict(title='Taxa de Erro (%)', range=[0, max(10, df_qualidade['Taxa de Erro (%)'].max() * 1.2)]),
+                margin=dict(t=30, b=0)
+            )
+            st.plotly_chart(fig_qualidade, use_container_width=True)
+        else:
+            st.info(f"Nenhum lançamento ou erro registrado para formar o gráfico de Qualidade na seleção atual.")
+            
     else:
         st.info("Arquivo de respostas não encontrado.")
         

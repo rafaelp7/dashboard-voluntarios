@@ -188,8 +188,11 @@ def fetch_google_drive_data(mes, ano, api_key):
                 "COZINHA": False, "ESPAÇO INFANTIL": False, "MANUTENÇÃO PREVENTIVA": False
             }
             
+            nomes_arquivos_encontrados = []
+            
             for arq in arquivos_igreja:
                 nome_upper = arq['name'].upper()
+                nomes_arquivos_encontrados.append(arq['name'])
                 if 'OCORRENC' in nome_upper or 'RELAT' in nome_upper: continue
                 if 'ESTAC' in nome_upper or 'PÁTIO' in nome_upper or 'PATIO' in nome_upper: status_arquivos["PÁTIO"] = True
                 if 'GEM' in nome_upper or 'G.E.M' in nome_upper: status_arquivos["GEM"] = True
@@ -199,14 +202,18 @@ def fetch_google_drive_data(mes, ano, api_key):
                 if 'MAN' in nome_upper: status_arquivos["MANUTENÇÃO PREVENTIVA"] = True
             
             codigo_igreja = igreja_folder['name'].split(" - ")[0].strip()
-            drive_resultados[codigo_igreja] = status_arquivos
+            drive_resultados[codigo_igreja] = {
+                "status": status_arquivos,
+                "arquivos": nomes_arquivos_encontrados
+            }
             
     return drive_resultados
 
 def buscar_status_drive_da_igreja(nome_igreja, drive_data):
     if not drive_data: return None
     codigo_alvo = nome_igreja.split(" - ")[0].strip()
-    return drive_data.get(codigo_alvo, {
+    igreja_data = drive_data.get(codigo_alvo, {})
+    return igreja_data.get("status", {
         "PÁTIO": False, "GEM": False, "LIMPEZA": False,
         "COZINHA": False, "ESPAÇO INFANTIL": False, "MANUTENÇÃO PREVENTIVA": False
     })
@@ -443,6 +450,25 @@ if df is not None:
         st.plotly_chart(fig_erros, use_container_width=True)
     else:
         st.info("ℹ️ Arquivo 'FORMULÁRIO QUALITATIVO 2026 (respostas).xlsx' não encontrado.")
+
+    st.markdown("---")
+    st.subheader("🛠️ Auditoria de Arquivos (Google Drive)")
+    with st.expander("🔍 Ver todos os arquivos lidos no Google Drive", expanded=False):
+        st.info("💡 O painel salva os arquivos na memória por 1 hora (Cache) para o site não ficar lento. Se você apagou ou enviou um arquivo no Drive AGORA, clique no botão abaixo para forçar a atualização imediata.")
+        if st.button("🔄 Forçar Atualização do Drive", type="primary", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+            
+        if drive_data:
+            auditoria_lista = []
+            for cod, info in drive_data.items():
+                lista_arq = info.get("arquivos", [])
+                text_arq = ", ".join(lista_arq) if lista_arq else "❌ Nenhum arquivo na pasta"
+                auditoria_lista.append({"Código Igreja": cod, "Arquivos Encontrados": text_arq})
+                
+            st.dataframe(pd.DataFrame(auditoria_lista), use_container_width=True, hide_index=True)
+        else:
+            st.warning("Nenhum arquivo encontrado ou API Key não configurada.")
 
     st.markdown("---")
     st.subheader("📌 Métricas Gerais Financeiras")

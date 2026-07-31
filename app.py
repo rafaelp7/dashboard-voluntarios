@@ -9,6 +9,17 @@ st.set_page_config(
     page_icon="📊",
     layout="wide"
 )
+# --- OCULTAR MENU E ÍCONE DO GITHUB ---
+esconder_estilo = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stApp > header {display: none;}
+    </style>
+"""
+st.markdown(esconder_estilo, unsafe_allow_html=True)
+# --------------------------------------
 
 st.title("📊 Painel de Controle - Atividades e Voluntários")
 st.markdown("---")

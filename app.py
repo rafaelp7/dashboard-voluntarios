@@ -98,6 +98,16 @@ ATIVIDADES_OBRIGATORIAS = ['LIMPEZA', 'GEM', 'PÁTIO']
 ATIVIDADES_ESPORADICAS = ['MANUTENÇÃO PREVENTIVA', 'ESPAÇO INFANTIL', 'COZINHA']
 IGREJAS_IGNORADAS = ['ADM - MARINGÁ - PR', 'PIA - MARINGÁ', 'BR 14-0601 - MARINGÁ - CENTRO']
 
+# Mapeamento para os filtros fixos de atividade
+MAPEAMENTO_ATIVIDADES = {
+    "LIMPEZA": ["LIMPEZA", "MPEZA", "MPESA"],
+    "GEM": ["GEM", "G.E.M"],
+    "PÁTIO": ["PÁTIO", "PATIO", "ESTACIONAMENTO", "ESTAC"],
+    "ESPAÇO INFANTIL": ["ESPAÇO INFANTIL", "EBI", "ESPAÇO BÍBLICO INFANTIL", "ESPAÇO BIBLICO INFANTIL", "INFA"],
+    "MANUTENÇÃO PREVENTIVA": ["MANUTENÇÃO PREVENTIVA", "MANUT", "MAN.", "PREVENT", "MAN"],
+    "COZINHA": ["COZINHA"]
+}
+
 def classificar_setor(localidade):
     for setor, locais in SETORES.items():
         if localidade in locais:
@@ -254,23 +264,17 @@ with st.container(border=True):
         else:
             st.session_state.filtro_igreja = 'Todas'
 
-        # 3. BOTÕES DE ATIVIDADE
+        # 3. BOTÕES FIXOS DE ATIVIDADE
         if 'Livro' in df_original.columns:
-            with st.expander("🛠️ Filtrar por Atividade"):
-                lista_atividades = ["Todas"] + sorted([str(x) for x in df_original['Livro'].dropna().unique()])
-                cols_por_linha_atv = min(len(lista_atividades), 6)
-                if cols_por_linha_atv == 0: cols_por_linha_atv = 1 
-                
-                for i in range(0, len(lista_atividades), cols_por_linha_atv):
-                    cols_atv = st.columns(cols_por_linha_atv)
-                    for j in range(cols_por_linha_atv):
-                        idx = i + j
-                        if idx < len(lista_atividades):
-                            ativ_nome = lista_atividades[idx]
-                            is_selected = (st.session_state.filtro_atividade == ativ_nome)
-                            if cols_atv[j].button(ativ_nome, use_container_width=True, type="primary" if is_selected else "secondary", key=f"btn_at_{idx}"):
-                                st.session_state.filtro_atividade = ativ_nome
-                                st.rerun()
+            st.markdown("**Selecione a Atividade:**")
+            lista_atividades = ["Todas", "LIMPEZA", "GEM", "PÁTIO", "ESPAÇO INFANTIL", "MANUTENÇÃO PREVENTIVA", "COZINHA"]
+            cols_atv = st.columns(len(lista_atividades))
+            
+            for i, ativ_nome in enumerate(lista_atividades):
+                is_selected = (st.session_state.filtro_atividade == ativ_nome)
+                if cols_atv[i].button(ativ_nome, use_container_width=True, type="primary" if is_selected else "secondary", key=f"btn_at_{i}"):
+                    st.session_state.filtro_atividade = ativ_nome
+                    st.rerun()
 
 # Atribuição dos filtros
 filtro_setor = st.session_state.filtro_setor
@@ -278,17 +282,26 @@ filtro_igreja = st.session_state.filtro_igreja
 filtro_atividade = st.session_state.filtro_atividade
 
 if df_original is not None:
-    # APLICAR FILTROS AO DATAFRAME PRINCIPAL
+    # 1. FILTRAR SETOR E IGREJA PRIMEIRO
     df = df_original.copy()
     if filtro_setor != "Todos": df = df[df['Setor'] == filtro_setor]
     if filtro_igreja != "Todas": df = df[df['Localidade'] == filtro_igreja]
-    if filtro_atividade != "Todas" and 'Livro' in df.columns: df = df[df['Livro'].astype(str) == filtro_atividade]
+    
+    # 2. BASE DE DADOS PARA AUDITORIA (SEM FILTRO DE ATIVIDADE)
+    df_base_pendencias = df.copy()
+
+    # 3. APLICAR FILTRO DE ATIVIDADE NO DF DE EXIBIÇÃO / KPIs
+    if filtro_atividade != "Todas" and 'Livro' in df.columns:
+        palavras_chave = MAPEAMENTO_ATIVIDADES.get(filtro_atividade, [filtro_atividade])
+        regex_pattern = '|'.join(palavras_chave)
+        df = df[df['Livro'].astype(str).str.upper().str.contains(regex_pattern, regex=True, na=False)]
 
     st.markdown("---")
     st.subheader("⚠️ Controle de Atividades e Anexos")
     
-    if 'Livro' in df.columns:
-        siga_lancamentos = df.groupby(['Setor', 'Localidade'])['Livro'].unique().reset_index()
+    # 4. USAR DF_BASE_PENDENCIAS PARA GERAR A AUDITORIA COMPLETA
+    if 'Livro' in df_base_pendencias.columns:
+        siga_lancamentos = df_base_pendencias.groupby(['Setor', 'Localidade'])['Livro'].unique().reset_index()
     else:
         st.error("A coluna 'Livro' não foi encontrada na planilha do SIGA.")
         siga_lancamentos = pd.DataFrame(columns=['Setor', 'Localidade', 'Livro'])
@@ -394,7 +407,7 @@ if df_original is not None:
         df_form_mes = df_form[(df_form['Mes_Submissao'] == mes_num) & (df_form['Ano_Submissao'] == ano_num)]
         igrejas_que_responderam = df_form_mes['Igreja_Identificada'].dropna().unique().tolist()
         
-        igrejas_alvo = df['Localidade'].unique().tolist() if filtro_igreja == "Todas" else [filtro_igreja]
+        igrejas_alvo = df_base_pendencias['Localidade'].unique().tolist() if filtro_igreja == "Todas" else [filtro_igreja]
         faltam_form = [ig for ig in igrejas_alvo if ig not in igrejas_que_responderam and ig not in IGREJAS_IGNORADAS]
         
         with st.expander(f"⚠️ {len(faltam_form)} congregações não enviaram o formulário"):
@@ -418,7 +431,9 @@ if df_original is not None:
                 if filtro_setor != "Todos" and classificar_setor(igreja) != filtro_setor: continue
                     
                 atividades_exigidas = set()
-                df_igreja_siga = df[df['Localidade'] == igreja]
+                # AQUI USAMOS O DF_BASE_PENDENCIAS PARA AVALIAR O FORMULÁRIO SEM O FILTRO DA TELA
+                df_igreja_siga = df_base_pendencias[df_base_pendencias['Localidade'] == igreja]
+                
                 if 'Livro' in df_igreja_siga.columns:
                     for atv in df_igreja_siga['Livro'].dropna(): atividades_exigidas.add(str(atv).upper())
                 
@@ -452,7 +467,7 @@ if df_original is not None:
             else: 
                 st.success("Todas as atividades lançadas foram analisadas nos formulários!")
 
-        # GRÁFICO QUALITATIVO
+        # GRÁFICO QUALITATIVO - USANDO DF COM O FILTRO DE TELA
         erros_por_atividade = []
         for ativ in ATIVIDADES_OBRIGATORIAS + ATIVIDADES_ESPORADICAS:
             erros_totais = 0

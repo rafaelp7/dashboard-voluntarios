@@ -313,7 +313,7 @@ if df_original is not None:
                 
         for atv_esp in ATIVIDADES_ESPORADICAS:
             if not any(atv_esp in lancado for lancado in atividades_lancadas):
-                if atv_esp == "MANUTENÇÃO PREVENTIVA" and any('MAN' in arq for arq in arquivos_desta_igreja): falta_siga.append(atv_esp)
+                if atv_esp == "MANUTENÇÃO PREVENTIVA" and any(x in arq for arq in arquivos_desta_igreja for x in ['MANUT', 'MAN.', 'PREVENT']): falta_siga.append(atv_esp)
                 elif atv_esp == "ESPAÇO INFANTIL" and any(x in arq for arq in arquivos_desta_igreja for x in ['INFA', 'EBI', 'E.B.I']): falta_siga.append(atv_esp)
                 elif atv_esp == "COZINHA" and any('COZINHA' in arq for arq in arquivos_desta_igreja): falta_siga.append(atv_esp)
 

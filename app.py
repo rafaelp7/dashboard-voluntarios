@@ -13,11 +13,20 @@ st.set_page_config(
 
 esconder_estilo = """
     <style>
-    /* Oculta o menu do Streamlit e o ícone do GitHub */
+    /* Oculta apenas o menu principal do Streamlit e rodapé */
     #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
     footer {visibility: hidden;}
-    .stApp > header {display: none;}
+    
+    /* Esconde elementos do cabeçalho, MAS preserva o botão da barra lateral (sidebar) */
+    header[data-testid="stHeader"] {
+        background: transparent;
+    }
+    header[data-testid="stHeader"] .st-emotion-cache-18ni7ap { /* Ícone do GitHub */
+        display: none !important;
+    }
+    header[data-testid="stHeader"] .st-emotion-cache-1wbqy5l { /* Botão Deploy */
+        display: none !important;
+    }
     
     /* Regras específicas para telas de celular (menores que 768px) */
     @media (max-width: 768px) {

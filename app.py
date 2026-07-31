@@ -167,7 +167,6 @@ def fetch_google_drive_data(mes, ano, api_key):
         return []
 
     folder_mes_name = f"{mes}-{ano}"
-    # Busca a pasta do mês (ex: 06-2026) em qualquer lugar do Drive compartilhado
     pastas_mes = search_drive(f"name = '{folder_mes_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed=false")
     
     if not pastas_mes:
@@ -176,11 +175,9 @@ def fetch_google_drive_data(mes, ano, api_key):
     mes_id = pastas_mes[0]['id']
     drive_resultados = {}
     
-    # Pega tudo dentro da pasta do mês (SETOR_01, SETOR_02, etc)
     pastas_setores = search_drive(f"'{mes_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed=false")
     
     for setor in pastas_setores:
-        # Pega as pastas de igrejas dentro de cada setor
         pastas_igrejas = search_drive(f"'{setor['id']}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed=false")
         
         for igreja_folder in pastas_igrejas:
@@ -201,7 +198,6 @@ def fetch_google_drive_data(mes, ano, api_key):
                 if 'INFA' in nome_upper or 'EBI' in nome_upper or 'E.B.I' in nome_upper: status_arquivos["ESPAÇO INFANTIL"] = True
                 if 'MAN' in nome_upper: status_arquivos["MANUTENÇÃO PREVENTIVA"] = True
             
-            # CORREÇÃO: Extrai o código exatamente como o sistema usa: "BR 14-0603"
             codigo_igreja = igreja_folder['name'].split(" - ")[0].strip()
             drive_resultados[codigo_igreja] = status_arquivos
             
@@ -209,7 +205,6 @@ def fetch_google_drive_data(mes, ano, api_key):
 
 def buscar_status_drive_da_igreja(nome_igreja, drive_data):
     if not drive_data: return None
-    # Extrai o "BR 14-XXXX" da tabela para casar exato com a leitura do Drive
     codigo_alvo = nome_igreja.split(" - ")[0].strip()
     return drive_data.get(codigo_alvo, {
         "PÁTIO": False, "GEM": False, "LIMPEZA": False,
@@ -240,7 +235,6 @@ df = load_data(selected_mes, selected_ano)
 df_form = load_form_data()
 df_fechamento = load_fechamento_data(selected_mes, selected_ano)
 
-# Tentativa de ler a API Key do Streamlit Cloud
 api_key = st.secrets.get("GDRIVE_API_KEY", None) if hasattr(st, "secrets") else None
 with st.spinner("Sincronizando com Google Drive..."):
     drive_data = fetch_google_drive_data(selected_mes, selected_ano, api_key)
@@ -310,17 +304,13 @@ if df is not None:
             faltam_anexos = []
 
             for ativ in ATIVIDADES_OBRIGATORIAS:
-                # 1. Avaliação de Lançamentos (SIGA)
                 if ativ not in texto_livros_lancados:
                     if ativ in ['LIMPEZA', 'GEM', 'PÁTIO']:
-                        faltam_no_siga.append(ativ) # Obrigatórias (Sempre cobra)
+                        faltam_no_siga.append(ativ)
                     elif ativ in ['MANUTENÇÃO PREVENTIVA', 'ESPAÇO INFANTIL', 'COZINHA']:
-                        # Esporádicas: Só cobra se a equipe scaneou o PDF no Drive mas esqueceu de lançar no SIGA
                         if status_drive is not None and status_drive.get(ativ) == True:
                             faltam_no_siga.append(f"{ativ} (Esqueceu SIGA)") 
                             
-                # 2. Avaliação de Anexos (Drive)
-                # Só cobra o PDF se a atividade FOI LANÇADA no SIGA
                 if status_drive is not None and ativ in texto_livros_lancados:
                     if not status_drive.get(ativ):
                         faltam_anexos.append(ativ)
@@ -335,22 +325,23 @@ if df is not None:
                     'Setor': classificar_setor(igreja), 'Igreja': igreja, 'Falta Anexar PDF no Drive': ", ".join(faltam_anexos)
                 })
 
-    g_col_a, g_col_b = st.columns(2)
-    with g_col_a:
-        st.markdown("**1. Pendentes no Sistema (SIGA)**")
-        if pendencias_atividades_siga:
+    # Tabela 1: SIGA (Agora usa expander inteiro e não colunas)
+    st.markdown("**1. Pendentes no Sistema (SIGA)**")
+    if pendencias_atividades_siga:
+        with st.expander(f"⚠️ {len(pendencias_atividades_siga)} congregações com pendências no sistema", expanded=False):
             st.dataframe(pd.DataFrame(pendencias_atividades_siga), use_container_width=True, hide_index=True)
-        else:
-            st.success("✅ Atividades em dia!")
+    else:
+        st.success("✅ Atividades em dia!")
             
-    with g_col_b:
-        st.markdown("**2. PDFs não encontrados (Google Drive)**")
-        if not api_key:
-            st.error("Configure a GDRIVE_API_KEY no Streamlit Secrets!")
-        elif pendencias_anexos_drive:
+    # Tabela 2: DRIVE (Fica em baixo, com novo título e usa expander inteiro)
+    st.markdown("**2. Pendencia de anexo no fechamento mensal**")
+    if not api_key:
+        st.error("Configure a GDRIVE_API_KEY no Streamlit Secrets!")
+    elif pendencias_anexos_drive:
+        with st.expander(f"⚠️ {len(pendencias_anexos_drive)} congregações com anexos faltando", expanded=False):
             st.dataframe(pd.DataFrame(pendencias_anexos_drive), use_container_width=True, hide_index=True)
-        else:
-            st.success("✅ Todos os lançamentos possuem arquivo correspondente!")
+    else:
+        st.success("✅ Todos os lançamentos possuem arquivo correspondente!")
 
     st.subheader("📂 Status de Fechamento Mensal")
     if df_fechamento is not None:
@@ -359,8 +350,8 @@ if df is not None:
         
         igrejas_abertas = fechamento_filtrado[fechamento_filtrado['Status'].str.upper() == 'ABERTO']
         if not igrejas_abertas.empty:
-            st.warning(f"⚠️ Existem {len(igrejas_abertas)} igrejas com o status ABERTO.")
-            st.dataframe(igrejas_abertas[['Setor', 'Localidade', 'Status']], use_container_width=True, hide_index=True)
+            with st.expander(f"⚠️ {len(igrejas_abertas)} igrejas com o status ABERTO", expanded=False):
+                st.dataframe(igrejas_abertas[['Setor', 'Localidade', 'Status']], use_container_width=True, hide_index=True)
         else:
             st.success(f"✅ Todos os fechamentos avaliados estão ENCERRADOS.")
     else:
@@ -373,8 +364,6 @@ if df is not None:
         df_form_filtrado = df_form[(df_form['Mes_Submissao'] == mes_num) & (df_form['Ano_Submissao'] == ano_num)]
         igrejas_que_responderam = df_form_filtrado['Igreja_Identificada'].dropna().unique().tolist()
         
-        # --- INÍCIO DA ALTERAÇÃO 3: NOVA LÓGICA QUALITATIVO E GRÁFICO ---
-        # 1. Congregações que NÃO enviaram o formulário
         faltam_form = [igreja for igreja in igrejas_cobradas if igreja not in igrejas_que_responderam]
         
         st.markdown("**1. Formulários Não Enviados**")
@@ -386,7 +375,6 @@ if df is not None:
         else:
             st.success("✅ Todas as congregações enviaram o formulário!")
 
-        # 2. Atividades NÃO informadas/analisadas no formulário
         st.markdown("**2. Atividades Não Analisadas no Formulário**")
         colunas_analisadas = [c for c in df_form_filtrado.columns if 'ASSINALAR AS ATIVIDADES' in str(c).upper()]
         
@@ -394,21 +382,17 @@ if df is not None:
         
         if colunas_analisadas:
             for igreja in igrejas_que_responderam:
-                if igreja in igrejas_cobradas: # Somente avalia igrejas dentro do filtro atual
-                    # Pegar livros lançados no SIGA
+                if igreja in igrejas_cobradas:
                     df_igreja_siga = df[df['Localidade'] == igreja]
                     livros_lancados_siga = [str(x).upper() for x in df_igreja_siga['Livro'].dropna().unique().tolist()] if 'Livro' in df_igreja_siga.columns else []
                     
-                    # Pegar status do Drive
                     status_drive = buscar_status_drive_da_igreja(igreja, drive_data)
                     
-                    # Agrupar todas as respostas desta igreja (caso mais de um colaborador tenha preenchido)
                     respostas_igreja = df_form_filtrado[df_form_filtrado['Igreja_Identificada'] == igreja]
                     texto_analisadas = " ".join([str(x).upper() for col in colunas_analisadas for x in respostas_igreja[col].dropna().tolist()])
                     
                     faltam_na_analise = []
                     for ativ in ATIVIDADES_OBRIGATORIAS:
-                        # Regra: Só exige no form se foi lançada no SIGA OU se o PDF existe no Drive
                         is_required = (ativ in livros_lancados_siga) or (status_drive is not None and status_drive.get(ativ) == True)
                         
                         if is_required and (ativ not in texto_analisadas):
@@ -433,13 +417,11 @@ if df is not None:
         erros_por_atividade = []
         for ativ in ATIVIDADES_OBRIGATORIAS:
             erros_totais = 0
-            # Busca todas as colunas que têm a Atividade E alguma palavra de erro
             colunas_alvo = [c for c in df_form_grafico.columns if ativ.upper() in str(c).upper() and 
                             ('RASURA' in str(c).upper() or 'ERRO' in str(c).upper() or 'BRANCO' in str(c).upper())]
             for col in colunas_alvo:
                 erros_totais += pd.to_numeric(df_form_grafico[col], errors='coerce').sum()
                 
-            # Verifica o total de lançamentos na tabela local
             lancamentos_totais = df[df['Livro'].astype(str).str.upper().str.contains(ativ.upper(), na=False)].shape[0] if 'Livro' in df.columns else 0
             taxa = (erros_totais / lancamentos_totais * 100) if lancamentos_totais > 0 else 0
             
@@ -456,11 +438,9 @@ if df is not None:
             color='Taxa de Erro (%)', color_continuous_scale="Reds"
         )
         
-        # --- REMOVE A BARRA DE CORES LATERAL DA LEGENDA ---
         fig_erros.update_layout(coloraxis_showscale=False) 
         
         st.plotly_chart(fig_erros, use_container_width=True)
-        # --- FIM DA ALTERAÇÃO 3 ---
     else:
         st.info("ℹ️ Arquivo 'FORMULÁRIO QUALITATIVO 2026 (respostas).xlsx' não encontrado.")
 

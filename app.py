@@ -49,6 +49,20 @@ IGREJAS_IGNORADAS = [
     'BR 14-0601 - MARINGÁ - CENTRO'
 ]
 
+# Função para carregar os dados do arquivo .txt do Fechamento Mensal
+@st.cache_data
+def load_fechamento_data(mes, ano):
+    mes_str = str(mes).zfill(2)
+    file_name = f'FECHAMENTO MENSAL {mes_str}-{ano}.txt'
+    try:
+        df_fechamento = pd.read_csv(file_name, sep='\t', skiprows=1, names=['Igreja', 'Status'])
+        # Limpar os dados
+        df_fechamento['Igreja'] = df_fechamento['Igreja'].str.strip()
+        df_fechamento['Status'] = df_fechamento['Status'].str.strip()
+        return df_fechamento
+    except FileNotFoundError:
+        return None
+
 # Lista unificada de todas as igrejas esperadas e filtradas
 todas_igrejas = [igreja for lista in SETORES.values() for igreja in lista]
 igrejas_cobradas_base = [igreja for igreja in todas_igrejas if igreja not in IGREJAS_IGNORADAS]
@@ -128,6 +142,17 @@ def load_form_data():
     except FileNotFoundError:
         return None
 
+# Mapeamento dos meses globais para serem usados no Form e no Fechamento
+meses_nomes = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 
+               7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
+
+hoje = datetime.date.today()
+mes_atual = hoje.month
+ano_atual = hoje.year
+mes_anterior = 12 if mes_atual == 1 else mes_atual - 1
+ano_padrao = ano_atual - 1 if mes_atual == 1 else ano_atual
+
+
 # Carregamento dos dados
 df = load_data()
 df_form = load_form_data()
@@ -139,6 +164,7 @@ st.sidebar.header("🔍 Filtros de Visualização")
 
 selected_setor = "Todos"
 selected_localidade = "Todas"
+selected_atividade = "Todas"
 
 if df is not None:
     setores_disponiveis = ["Todos"] + sorted(list(df['Setor'].unique()))
@@ -152,6 +178,11 @@ if df is not None:
         localidades_disponiveis = ["Todas"] + sorted(list(df['Localidade'].dropna().unique()))
 
     selected_localidade = st.sidebar.selectbox("Selecione a Igreja", localidades_disponiveis)
+    
+    # NOVO FILTRO DE ATIVIDADE
+    if 'Livro' in df.columns:
+        atividades_disponiveis = ["Todas"] + sorted(list(df['Livro'].dropna().unique()))
+        selected_atividade = st.sidebar.selectbox("Selecione a Atividade", atividades_disponiveis)
 
 # =========================================================
 # 🚨 SEÇÃO DE ALERTAS E PENDÊNCIAS (EM BLOCO ÚNICO VERTICAL)
@@ -204,26 +235,21 @@ if df is not None:
             st.success("Todas as atividades registradas para a seleção atual!")
 
     st.markdown("---")
-    
-    # 3. Tabela: Formulário Qualitativo (Movida para cá, abaixo das atividades)
-    st.subheader("📋 Pendências Formulário Qualitativo")
 
-    meses_nomes = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho', 
-                   7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
-
-    hoje = datetime.date.today()
-    mes_atual = hoje.month
-    ano_atual = hoje.year
-    mes_anterior = 12 if mes_atual == 1 else mes_atual - 1
-    ano_padrao = ano_atual - 1 if mes_atual == 1 else ano_atual
-
-    col_mes, col_ano = st.columns([3, 2])
-    with col_mes:
-        mes_selecionado_nome = st.selectbox("Mês ref.:", list(meses_nomes.values()), index=mes_anterior - 1)
-    with col_ano:
-        ano_selecionado = st.number_input("Ano ref.:", min_value=2020, max_value=2100, value=ano_padrao, step=1)
+    # Controles unificados de Data para as pendências abaixo
+    st.subheader("🗓️ Filtros de Período para Pendências Mensais")
+    col_mes_pend, col_ano_pend = st.columns([3, 2])
+    with col_mes_pend:
+        mes_selecionado_nome = st.selectbox("Mês de Referência:", list(meses_nomes.values()), index=mes_anterior - 1)
+    with col_ano_pend:
+        ano_selecionado = st.number_input("Ano de Referência:", min_value=2020, max_value=2100, value=ano_padrao, step=1)
 
     mes_selecionado_num = list(meses_nomes.keys())[list(meses_nomes.values()).index(mes_selecionado_nome)]
+    
+    st.markdown("---")
+    
+    # 3. Tabela: Formulário Qualitativo
+    st.subheader("📋 Pendências Formulário Qualitativo")
 
     if df_form is not None:
         df_form_filtrado = df_form[
@@ -242,6 +268,37 @@ if df is not None:
             st.success(f"✅ Formulários em dia ({mes_selecionado_nome})!")
     else:
         st.info("Arquivo de respostas não encontrado.")
+        
+    st.markdown("---")
+    
+    # 4. Tabela: Status do Fechamento Mensal
+    st.subheader(f"📅 Status do Fechamento Mensal ({mes_selecionado_nome}/{ano_selecionado})")
+    
+    # Carrega o arquivo dinâmico
+    df_fechamento_raw = load_fechamento_data(mes_selecionado_num, ano_selecionado)
+
+    if df_fechamento_raw is not None:
+        df_fechamento_raw['Setor'] = df_fechamento_raw['Igreja'].apply(classificar_setor)
+    
+        # Filtra o fechamento pelo Setor e Localidade do menu lateral
+        if selected_setor != "Todos":
+            df_fechamento_raw = df_fechamento_raw[df_fechamento_raw['Setor'] == selected_setor]
+        if selected_localidade != "Todas":
+            df_fechamento_raw = df_fechamento_raw[df_fechamento_raw['Igreja'] == selected_localidade]
+            
+        fechamentos_abertos = df_fechamento_raw[df_fechamento_raw['Status'] == 'Aberto']
+    
+        if not fechamentos_abertos.empty:
+            st.warning(f"⚠️ {len(fechamentos_abertos)} igrejas com Fechamento Mensal ABERTO.")
+            st.dataframe(fechamentos_abertos[['Setor', 'Igreja', 'Status']], use_container_width=True, hide_index=True)
+        else:
+            st.success("✅ Todos os fechamentos mensais estão encerrados para a seleção atual!")
+            
+        with st.expander("Ver todos os status de fechamento neste período"):
+            st.dataframe(df_fechamento_raw[['Setor', 'Igreja', 'Status']], use_container_width=True, hide_index=True)
+    else:
+        mes_str_aviso = str(mes_selecionado_num).zfill(2)
+        st.info(f"Arquivo 'FECHAMENTO MENSAL {mes_str_aviso}-{ano_selecionado}.txt' não encontrado no servidor.")
 
 else:
     st.error("Base de dados 'tabela.xlsx' não encontrada.")
@@ -258,6 +315,8 @@ if df is not None:
         df_filtrado = df_filtrado[df_filtrado['Setor'] == selected_setor]
     if selected_localidade != "Todas":
         df_filtrado = df_filtrado[df_filtrado['Localidade'] == selected_localidade]
+    if selected_atividade != "Todas" and 'Livro' in df_filtrado.columns:
+        df_filtrado = df_filtrado[df_filtrado['Livro'] == selected_atividade]
 
 
     st.subheader(f"📌 Métricas - {selected_setor if selected_localidade == 'Todas' else selected_localidade}")

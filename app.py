@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import os
 
 # Configuração da página
 st.set_page_config(
@@ -40,21 +39,24 @@ SETORES = {
     ]
 }
 
-# Função auxiliar para classificar a localidade
+# Atividades que precisam constar obrigatoriamente
+ATIVIDADES_OBRIGATORIAS = ['LIMPEZA', 'GEM', 'PÁTIO', 'MANUTENÇÃO PREVENTIVA', 'ESPAÇO INFANTIL', 'COZINHA']
+
 def classificar_setor(localidade):
     for setor, locais in SETORES.items():
         if localidade in locais:
             return setor
     return 'Não Classificado'
 
-# Função para carregar os dados locais
 @st.cache_data
 def load_data():
-    # O arquivo deve se chamar exatamente 'tabela.xlsx' e estar na mesma pasta no GitHub
     try:
         df = pd.read_excel('tabela.xlsx')
     except FileNotFoundError:
         return None
+    
+    # Remove espaços vazios nos nomes das colunas para evitar erros (ex: "Livro " para "Livro")
+    df.columns = df.columns.str.strip()
     
     col_mapping = {
         'Localida': 'Localidade',
@@ -62,7 +64,7 @@ def load_data():
         'Data Na': 'Data Nasc',
         'H. Des': 'Horas Desconto'
     }
-    df = df.rename(columns=lambda x: col_mapping.get(x.strip(), x.strip()))
+    df = df.rename(columns=lambda x: col_mapping.get(x, x))
 
     if 'Valor' in df.columns:
         if df['Valor'].dtype == object:
@@ -71,42 +73,103 @@ def load_data():
     if 'Data' in df.columns:
         df['Data'] = pd.to_datetime(df['Data'], errors='coerce', dayfirst=True)
 
-    # Cria a nova coluna de 'Setor' aplicando a função de classificação
     if 'Localidade' in df.columns:
         df['Setor'] = df['Localidade'].apply(classificar_setor)
 
     return df
 
-# Tenta carregar a base fixa
 df = load_data()
 
 if df is not None:
-    # --- BARRA LATERAL: FILTROS HIERÁRQUICOS ---
-    st.sidebar.header("🔍 Filtros")
+    # ---------------------------------------------------------
+    # 🚨 SEÇÃO DE ALERTAS E PENDÊNCIAS (Dados Globais)
+    # ---------------------------------------------------------
+    st.header("🚨 Alertas e Pendências")
+    
+    # Consolida a lista de todas as igrejas esperadas
+    todas_igrejas = [igreja for lista in SETORES.values() for igreja in lista]
+    # Lista as igrejas que apareceram na planilha
+    igrejas_presentes = df['Localidade'].dropna().unique().tolist() if 'Localidade' in df.columns else []
+    
+    # 1. Identificar quem não lançou nada
+    igrejas_sem_lancamento = [igreja for igreja in todas_igrejas if igreja not in igrejas_presentes]
+    
+    alerta_col1, alerta_col2 = st.columns(2)
+    
+    with alerta_col1:
+        st.subheader("❌ Nenhuma atividade lançada")
+        if igrejas_sem_lancamento:
+            df_sem_lanc = pd.DataFrame(igrejas_sem_lancamento, columns=["Igreja"])
+            df_sem_lanc['Setor'] = df_sem_lanc['Igreja'].apply(classificar_setor)
+            st.dataframe(df_sem_lanc[['Setor', 'Igreja']], use_container_width=True, hide_index=True)
+        else:
+            st.success("Todas as igrejas possuem ao menos um lançamento!")
 
-    # 1. Filtro de Setor
+    # 2. Identificar quem lançou, mas faltou alguma atividade no 'Livro'
+    with alerta_col2:
+        st.subheader("⚠️ Atividades faltando")
+        if 'Livro' in df.columns and 'Localidade' in df.columns:
+            pendencias_atividades = []
+            
+            for igreja in igrejas_presentes:
+                df_igreja = df[df['Localidade'] == igreja]
+                # Junta todo o texto da coluna Livro daquela igreja e deixa em maiúsculo para buscar
+                texto_livros = ' '.join(df_igreja['Livro'].dropna().astype(str).str.upper().tolist())
+                
+                faltam = []
+                for ativ in ATIVIDADES_OBRIGATORIAS:
+                    if ativ not in texto_livros:
+                        faltam.append(ativ)
+                
+                if faltam:
+                    pendencias_atividades.append({
+                        'Setor': classificar_setor(igreja),
+                        'Igreja': igreja,
+                        'Atividades Faltantes': ", ".join(faltam)
+                    })
+            
+            if pendencias_atividades:
+                df_pend_ativ = pd.DataFrame(pendencias_atividades)
+                st.dataframe(df_pend_ativ, use_container_width=True, hide_index=True)
+            else:
+                st.success("Todas as igrejas registraram todas as atividades obrigatórias!")
+        else:
+            st.info("Coluna 'Livro' não encontrada para verificar atividades.")
+            
+    st.markdown("---")
+
+
+    # ---------------------------------------------------------
+    # 🔍 BARRA LATERAL: FILTROS (Afeta o restante do painel)
+    # ---------------------------------------------------------
+    st.sidebar.header("🔍 Filtros de Visualização")
+
+    # Filtro de Setor
     setores_disponiveis = ["Todos"] + sorted(list(df['Setor'].unique()))
     selected_setor = st.sidebar.selectbox("Selecione o Setor", setores_disponiveis)
     
     if selected_setor != "Todos":
         df = df[df['Setor'] == selected_setor]
 
-    # 2. Filtro de Igreja (Localidade) - Depende do setor escolhido
+    # Filtro de Igreja (Localidade)
     if 'Localidade' in df.columns:
         localidades_disponiveis = ["Todas"] + sorted(list(df['Localidade'].dropna().unique()))
         selected_localidade = st.sidebar.selectbox("Selecione a Igreja", localidades_disponiveis)
         if selected_localidade != "Todas":
             df = df[df['Localidade'] == selected_localidade]
 
-    # 3. Filtro de Função
+    # Filtro de Função
     if 'Função' in df.columns:
         funcoes = ["Todas"] + list(df['Função'].dropna().unique())
         selected_funcao = st.sidebar.selectbox("Função", funcoes)
         if selected_funcao != "Todas":
             df = df[df['Função'] == selected_funcao]
 
-    # --- CARTÕES DE MÉTRICAS (KPIs) ---
-    st.subheader("📌 Métricas Gerais")
+
+    # ---------------------------------------------------------
+    # 📌 CARTÕES DE MÉTRICAS E GRÁFICOS
+    # ---------------------------------------------------------
+    st.subheader("📌 Métricas Gerais (Filtradas)")
     col1, col2, col3, col4 = st.columns(4)
 
     total_registros = len(df)
@@ -121,14 +184,11 @@ if df is not None:
 
     st.markdown("---")
 
-    # --- GRÁFICOS INTERATIVOS ---
     st.subheader("📈 Análises Gráficas")
     g_col1, g_col2 = st.columns(2)
 
     with g_col1:
         if 'Localidade' in df.columns and 'Valor' in df.columns:
-            # Se o usuário escolheu um setor específico, mostra as igrejas daquele setor. 
-            # Se não, mostra o total por setor.
             if selected_setor == "Todos":
                 df_grafico1 = df.groupby('Setor')['Valor'].sum().reset_index()
                 x_axis = 'Setor'
@@ -157,13 +217,11 @@ if df is not None:
 
     st.markdown("---")
 
-    # --- TABELA DE DADOS ---
     st.subheader("📄 Tabela de Dados Filtrados")
     df_display = df.copy()
     if 'Data' in df_display.columns:
         df_display['Data'] = df_display['Data'].dt.strftime('%d/%m/%Y')
     
-    # Reordenando colunas para mostrar Setor logo no início
     cols = df_display.columns.tolist()
     if 'Setor' in cols:
         cols.insert(0, cols.pop(cols.index('Setor')))

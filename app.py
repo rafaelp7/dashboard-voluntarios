@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import datetime
 import os
-import requests # Necessário para ler o Google Drive
+import requests
 
 st.set_page_config(
     page_title="Dashboard de Voluntários & Fechamento",
@@ -14,23 +14,19 @@ st.set_page_config(
 
 esconder_estilo = """
     <style>
-    /* Oculta o menu do Streamlit e o ícone do GitHub, mantendo o botão de sidebar no celular */
+    /* Oculta o menu de desenvolvedor e botão de deploy */
     #MainMenu {visibility: hidden;}
-    header {background: transparent;}
-    .stApp > header {background: transparent;}
     .stDeployButton {display: none;}
     
+    /* Regras específicas para celulares */
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 2rem;
+            padding-top: 1rem;
             padding-left: 1rem;
             padding-right: 1rem;
         }
         h1 {
-            font-size: 1.8rem !important;
-        }
-        .stButton > button {
-            margin-bottom: 5px;
+            font-size: 1.6rem !important;
         }
     }
     
@@ -39,6 +35,7 @@ esconder_estilo = """
         padding: 20px;
         border-radius: 10px;
         margin-bottom: 20px;
+        border: 1px solid #e0e0e0;
     }
     </style>
 """
@@ -154,16 +151,10 @@ def load_fechamento_data(mes, ano):
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_google_drive_data(mes, ano, api_key):
-    """
-    Navega pelas pastas do Google Drive e verifica quais PDFs de atividades
-    estão presentes para cada igreja no mês especificado.
-    """
+    """ Busca PDFs no Google Drive cruzando os nomes exatos. """
     if not api_key:
         return None
 
-    # ID da pasta principal fornecida pelo usuário
-    ROOT_FOLDER_ID = "1vIBw5h1iuqGyRXBCrKl9kZORfVJzLlQ5"
-    
     def search_drive(query):
         url = "https://www.googleapis.com/drive/v3/files"
         params = {'q': query, 'key': api_key, 'fields': "files(id, name, mimeType)"}
@@ -175,28 +166,26 @@ def fetch_google_drive_data(mes, ano, api_key):
             pass
         return []
 
-    # 1. Encontrar a pasta do mês (ex: 06-2026)
     folder_mes_name = f"{mes}-{ano}"
-    pastas_mes = search_drive(f"'{ROOT_FOLDER_ID}' in parents and name = '{folder_mes_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed=false")
+    # Busca a pasta do mês (ex: 06-2026) em qualquer lugar do Drive compartilhado
+    pastas_mes = search_drive(f"name = '{folder_mes_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed=false")
     
     if not pastas_mes:
-        return {} # Pasta do mês não encontrada
+        return {} 
         
     mes_id = pastas_mes[0]['id']
-    
-    # 2. Encontrar os setores dentro do mês
-    pastas_setores = search_drive(f"'{mes_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed=false")
-    
     drive_resultados = {}
     
-    # 3. Iterar setores e buscar igrejas
+    # Pega tudo dentro da pasta do mês (SETOR_01, SETOR_02, etc)
+    pastas_setores = search_drive(f"'{mes_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed=false")
+    
     for setor in pastas_setores:
+        # Pega as pastas de igrejas dentro de cada setor
         pastas_igrejas = search_drive(f"'{setor['id']}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed=false")
         
         for igreja_folder in pastas_igrejas:
             arquivos_igreja = search_drive(f"'{igreja_folder['id']}' in parents and trashed=false")
             
-            # 4. Avaliar lógica de nomes (Regras do usuário)
             status_arquivos = {
                 "PÁTIO": False, "GEM": False, "LIMPEZA": False,
                 "COZINHA": False, "ESPAÇO INFANTIL": False, "MANUTENÇÃO PREVENTIVA": False
@@ -204,40 +193,28 @@ def fetch_google_drive_data(mes, ano, api_key):
             
             for arq in arquivos_igreja:
                 nome_upper = arq['name'].upper()
-                if 'OCORRENC' in nome_upper or 'RELAT' in nome_upper:
-                    continue
-                    
-                if 'ESTAC' in nome_upper or 'PÁTIO' in nome_upper or 'PATIO' in nome_upper:
-                    status_arquivos["PÁTIO"] = True
-                if 'GEM' in nome_upper or 'G.E.M' in nome_upper:
-                    status_arquivos["GEM"] = True
-                if 'MPEZA' in nome_upper or 'MPESA' in nome_upper:
-                    status_arquivos["LIMPEZA"] = True
-                if 'COZINHA' in nome_upper:
-                    status_arquivos["COZINHA"] = True
-                if 'INFA' in nome_upper or 'EBI' in nome_upper or 'E.B.I' in nome_upper:
-                    status_arquivos["ESPAÇO INFANTIL"] = True
-                if 'MAN' in nome_upper:
-                    status_arquivos["MANUTENÇÃO PREVENTIVA"] = True
+                if 'OCORRENC' in nome_upper or 'RELAT' in nome_upper: continue
+                if 'ESTAC' in nome_upper or 'PÁTIO' in nome_upper or 'PATIO' in nome_upper: status_arquivos["PÁTIO"] = True
+                if 'GEM' in nome_upper or 'G.E.M' in nome_upper: status_arquivos["GEM"] = True
+                if 'MPEZA' in nome_upper or 'MPESA' in nome_upper: status_arquivos["LIMPEZA"] = True
+                if 'COZINHA' in nome_upper: status_arquivos["COZINHA"] = True
+                if 'INFA' in nome_upper or 'EBI' in nome_upper or 'E.B.I' in nome_upper: status_arquivos["ESPAÇO INFANTIL"] = True
+                if 'MAN' in nome_upper: status_arquivos["MANUTENÇÃO PREVENTIVA"] = True
             
-            # Armazena usando um código extraído para bater exato (ex: "BR 14-0601")
-            # Isso evita erros se a pasta estiver nomeada levemente diferente
-            codigo_igreja = next((word for word in igreja_folder['name'].split() if "14-" in word), igreja_folder['name'])
+            # CORREÇÃO: Extrai o código exatamente como o sistema usa: "BR 14-0603"
+            codigo_igreja = igreja_folder['name'].split(" - ")[0].strip()
             drive_resultados[codigo_igreja] = status_arquivos
             
     return drive_resultados
 
 def buscar_status_drive_da_igreja(nome_igreja, drive_data):
     if not drive_data: return None
-    # Pega o "BR 14-XXXX" da string completa para comparar
+    # Extrai o "BR 14-XXXX" da tabela para casar exato com a leitura do Drive
     codigo_alvo = nome_igreja.split(" - ")[0].strip()
-    for key, status in drive_data.items():
-        if codigo_alvo in key:
-            return status
-    return {
+    return drive_data.get(codigo_alvo, {
         "PÁTIO": False, "GEM": False, "LIMPEZA": False,
         "COZINHA": False, "ESPAÇO INFANTIL": False, "MANUTENÇÃO PREVENTIVA": False
-    } # Se não achou a pasta da igreja, assume que não tem nada
+    })
 
 st.title("📊 Painel de Comando - Voluntários e Fechamento")
 
@@ -263,7 +240,7 @@ df = load_data(selected_mes, selected_ano)
 df_form = load_form_data()
 df_fechamento = load_fechamento_data(selected_mes, selected_ano)
 
-# Tentativa de ler a Chave de API do Google nos Secrets do Streamlit
+# Tentativa de ler a API Key do Streamlit Cloud
 api_key = st.secrets.get("GDRIVE_API_KEY", None) if hasattr(st, "secrets") else None
 with st.spinner("Sincronizando com Google Drive..."):
     drive_data = fetch_google_drive_data(selected_mes, selected_ano, api_key)
@@ -319,24 +296,6 @@ if df is not None:
     else:
         igrejas_cobradas = [igreja for lista in SETORES.values() for igreja in lista if igreja not in IGREJAS_IGNORADAS]
 
-    igrejas_presentes_df = df['Localidade'].dropna().unique().tolist() if 'Localidade' in df.columns else []
-
-    # BLOCO 1: Nenhuma atividade
-    st.subheader("❌ Nenhuma atividade lançada (SIGA)")
-    igrejas_sem_lancamento = [igreja for igreja in igrejas_cobradas if igreja not in igrejas_presentes_df]
-    if igrejas_sem_lancamento:
-        df_sem_lanc = pd.DataFrame(igrejas_sem_lancamento, columns=["Igreja"])
-        df_sem_lanc['Setor'] = df_sem_lanc['Igreja'].apply(classificar_setor)
-        st.dataframe(df_sem_lanc[['Setor', 'Igreja']], use_container_width=True, hide_index=True)
-    else:
-        st.success("✅ Todas as igrejas da seleção possuem ao menos um lançamento no sistema.")
-
-    # BLOCO 2 E 3: Atividades Faltando no SIGA e Anexos Faltando no Drive
-    st.subheader("⚠️ Controle de Atividades e Anexos (PDFs)")
-    
-    if not api_key:
-        st.info("💡 **DICA:** A verificação automática de PDFs no Google Drive está desativada. Para habilitar, configure a chave `GDRIVE_API_KEY` nos secrets do Streamlit. A leitura será baseada apenas nas regras do sistema.")
-
     pendencias_atividades_siga = []
     pendencias_anexos_drive = []
 
@@ -347,25 +306,21 @@ if df is not None:
             texto_livros_lancados = ' '.join(livros_lancados)
             
             status_drive = buscar_status_drive_da_igreja(igreja, drive_data)
-            
             faltam_no_siga = []
             faltam_anexos = []
 
             for ativ in ATIVIDADES_OBRIGATORIAS:
-                # 1. Checagem de Atividades Faltantes no SIGA
+                # 1. Avaliação de Lançamentos (SIGA)
                 if ativ not in texto_livros_lancados:
                     if ativ in ['LIMPEZA', 'GEM', 'PÁTIO']:
-                        faltam_no_siga.append(ativ) # Obrigatórias
+                        faltam_no_siga.append(ativ) # Obrigatórias (Sempre cobra)
                     elif ativ in ['MANUTENÇÃO PREVENTIVA', 'ESPAÇO INFANTIL', 'COZINHA']:
-                        # Regra nova: Só é pendência no SIGA se o PDF NÃO estiver no drive. 
-                        # Se o PDF estiver no drive, significa que fizeram a atividade, mas esqueceram de lançar (falta grave)
-                        if status_drive is not None:
-                            if not status_drive.get(ativ):
-                                faltam_no_siga.append(ativ)
-                        else:
-                            faltam_no_siga.append(ativ) # Sem Drive, continua o comportamento antigo
-                
-                # 2. Checagem de Anexos Faltando no Drive (Só verifica se foi lançado no SIGA)
+                        # Esporádicas: Só cobra se a equipe scaneou o PDF no Drive mas esqueceu de lançar no SIGA
+                        if status_drive is not None and status_drive.get(ativ) == True:
+                            faltam_no_siga.append(f"{ativ} (Esqueceu SIGA)") 
+                            
+                # 2. Avaliação de Anexos (Drive)
+                # Só cobra o PDF se a atividade FOI LANÇADA no SIGA
                 if status_drive is not None and ativ in texto_livros_lancados:
                     if not status_drive.get(ativ):
                         faltam_anexos.append(ativ)
@@ -391,13 +346,12 @@ if df is not None:
     with g_col_b:
         st.markdown("**2. PDFs não encontrados (Google Drive)**")
         if not api_key:
-            st.warning("Verificação Offline")
+            st.error("Configure a GDRIVE_API_KEY no Streamlit Secrets!")
         elif pendencias_anexos_drive:
             st.dataframe(pd.DataFrame(pendencias_anexos_drive), use_container_width=True, hide_index=True)
         else:
             st.success("✅ Todos os lançamentos possuem arquivo correspondente!")
 
-    # BLOCO 4: Fechamento Mensal
     st.subheader("📂 Status de Fechamento Mensal")
     if df_fechamento is not None:
         fechamento_filtrado = df_fechamento[df_fechamento['Localidade'].isin(igrejas_cobradas)].copy()
@@ -412,7 +366,6 @@ if df is not None:
     else:
         st.info(f"ℹ️ Arquivo 'FECHAMENTO MENSAL {selected_mes}-{selected_ano}.txt' não encontrado.")
 
-    # BLOCO 5: Pendências Qualitativas
     st.subheader("📋 Pendências Formulário Qualitativo")
     if df_form is not None:
         mes_num = int(selected_mes)
@@ -435,11 +388,13 @@ if df is not None:
         erros_por_atividade = []
         for ativ in ATIVIDADES_OBRIGATORIAS:
             erros_totais = 0
+            # Busca todas as colunas que têm a Atividade E alguma palavra de erro
             colunas_alvo = [c for c in df_form_grafico.columns if ativ.upper() in str(c).upper() and 
                             ('RASURA' in str(c).upper() or 'ERRO' in str(c).upper() or 'BRANCO' in str(c).upper())]
             for col in colunas_alvo:
                 erros_totais += pd.to_numeric(df_form_grafico[col], errors='coerce').sum()
                 
+            # Verifica o total de lançamentos na tabela local
             lancamentos_totais = df[df['Livro'].astype(str).str.upper().str.contains(ativ.upper(), na=False)].shape[0]
             taxa = (erros_totais / lancamentos_totais * 100) if lancamentos_totais > 0 else 0
             
@@ -460,7 +415,6 @@ if df is not None:
         st.info("ℹ️ Arquivo 'FORMULÁRIO QUALITATIVO 2026 (respostas).xlsx' não encontrado.")
 
     st.markdown("---")
-
     st.subheader("📌 Métricas Gerais Financeiras")
     col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
 

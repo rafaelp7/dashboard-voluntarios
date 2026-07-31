@@ -287,14 +287,14 @@ if df_original is not None:
     if filtro_setor != "Todos": df = df[df['Setor'] == filtro_setor]
     if filtro_igreja != "Todas": df = df[df['Localidade'] == filtro_igreja]
     
-    # 2. BASE DE DADOS PARA AUDITORIA (SEM FILTRO DE ATIVIDADE)
-    df_base_pendencias = df.copy()
-
-    # 3. APLICAR FILTRO DE ATIVIDADE NO DF DE EXIBIÇÃO / KPIs
+    # 2. APLICAR FILTRO DE ATIVIDADE NO DF
     if filtro_atividade != "Todas" and 'Livro' in df.columns:
         palavras_chave = MAPEAMENTO_ATIVIDADES.get(filtro_atividade, [filtro_atividade])
         regex_pattern = '|'.join(palavras_chave)
         df = df[df['Livro'].astype(str).str.upper().str.contains(regex_pattern, regex=True, na=False)]
+
+    # 3. BASE DE DADOS PARA AUDITORIA E KPIs (AGORA COM TODOS OS FILTROS)
+    df_base_pendencias = df.copy()
 
     st.markdown("---")
     st.subheader("⚠️ Controle de Atividades e Anexos")
@@ -302,6 +302,7 @@ if df_original is not None:
     # 4. USAR DF_BASE_PENDENCIAS PARA GERAR A AUDITORIA COMPLETA
     if 'Livro' in df_base_pendencias.columns:
         siga_lancamentos = df_base_pendencias.groupby(['Setor', 'Localidade'])['Livro'].unique().reset_index()
+    # ... (o resto do código continua igual)
     else:
         st.error("A coluna 'Livro' não foi encontrada na planilha do SIGA.")
         siga_lancamentos = pd.DataFrame(columns=['Setor', 'Localidade', 'Livro'])

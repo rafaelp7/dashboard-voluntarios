@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -174,48 +175,49 @@ with st.container(border=True):
                 st.session_state.filtro_igreja = 'Todas'  # Reseta a igreja selecionada ao trocar de setor
                 st.rerun()
 
-        # Filtrar o DataFrame temporário para descobrir as igrejas
+        # 2. BOTÕES DE IGREJA (SÓ APARECE SE UM SETOR ESPECÍFICO FOR SELECIONADO)
         if st.session_state.filtro_setor != "Todos":
             df_temp = df_original[df_original['Setor'] == st.session_state.filtro_setor]
-        else:
-            df_temp = df_original
-            
-        lista_igrejas = ["Todas"] + sorted([str(x) for x in df_temp['Localidade'].dropna().unique() if x not in IGREJAS_IGNORADAS])
+            lista_igrejas = ["Todas"] + sorted([str(x) for x in df_temp['Localidade'].dropna().unique() if x not in IGREJAS_IGNORADAS])
 
-        # 2. BOTÕES DE IGREJA
-        st.markdown("**Selecione a Igreja:**")
-        cols_por_linha = 4 # Exibir em grade com 4 botões por linha para estética
-        
-        for i in range(0, len(lista_igrejas), cols_por_linha):
-            cols_ig = st.columns(cols_por_linha)
-            for j in range(cols_por_linha):
-                idx = i + j
-                if idx < len(lista_igrejas):
-                    ig_nome = lista_igrejas[idx]
-                    is_selected = (st.session_state.filtro_igreja == ig_nome)
-                    # Abrevia nomes muito longos caso necessário
-                    btn_label = ig_nome if len(ig_nome) < 40 else ig_nome[:37] + "..." 
-                    if cols_ig[j].button(btn_label, use_container_width=True, type="primary" if is_selected else "secondary", key=f"btn_ig_{idx}"):
-                        st.session_state.filtro_igreja = ig_nome
-                        st.rerun()
-
-        # 3. BOTÕES DE ATIVIDADE
-        if 'Livro' in df_original.columns:
-            st.markdown("**Filtrar por Atividade:**")
-            lista_atividades = ["Todas"] + sorted([str(x) for x in df_original['Livro'].dropna().unique()])
+            st.markdown("**Selecione a Igreja:**")
+            cols_por_linha = 4 # Exibir em grade com 4 botões por linha para estética
             
-            # Até 6 atividades por linha
-            cols_por_linha_atv = min(len(lista_atividades), 6)
-            for i in range(0, len(lista_atividades), cols_por_linha_atv):
-                cols_atv = st.columns(cols_por_linha_atv)
-                for j in range(cols_por_linha_atv):
+            for i in range(0, len(lista_igrejas), cols_por_linha):
+                cols_ig = st.columns(cols_por_linha)
+                for j in range(cols_por_linha):
                     idx = i + j
-                    if idx < len(lista_atividades):
-                        ativ_nome = lista_atividades[idx]
-                        is_selected = (st.session_state.filtro_atividade == ativ_nome)
-                        if cols_atv[j].button(ativ_nome, use_container_width=True, type="primary" if is_selected else "secondary", key=f"btn_at_{idx}"):
-                            st.session_state.filtro_atividade = ativ_nome
+                    if idx < len(lista_igrejas):
+                        ig_nome = lista_igrejas[idx]
+                        is_selected = (st.session_state.filtro_igreja == ig_nome)
+                        # Abrevia nomes muito longos caso necessário
+                        btn_label = ig_nome if len(ig_nome) < 40 else ig_nome[:37] + "..." 
+                        if cols_ig[j].button(btn_label, use_container_width=True, type="primary" if is_selected else "secondary", key=f"btn_ig_{idx}"):
+                            st.session_state.filtro_igreja = ig_nome
                             st.rerun()
+        else:
+            # Garante que as igrejas sejam resetadas caso volte para 'Todos'
+            st.session_state.filtro_igreja = 'Todas'
+
+        # 3. BOTÕES DE ATIVIDADE (DENTRO DO EXPANDER)
+        if 'Livro' in df_original.columns:
+            with st.expander("🛠️ Filtrar por Atividade"):
+                lista_atividades = ["Todas"] + sorted([str(x) for x in df_original['Livro'].dropna().unique()])
+                
+                # Até 6 atividades por linha
+                cols_por_linha_atv = min(len(lista_atividades), 6)
+                if cols_por_linha_atv == 0: cols_por_linha_atv = 1 # Proteção adicional
+                
+                for i in range(0, len(lista_atividades), cols_por_linha_atv):
+                    cols_atv = st.columns(cols_por_linha_atv)
+                    for j in range(cols_por_linha_atv):
+                        idx = i + j
+                        if idx < len(lista_atividades):
+                            ativ_nome = lista_atividades[idx]
+                            is_selected = (st.session_state.filtro_atividade == ativ_nome)
+                            if cols_atv[j].button(ativ_nome, use_container_width=True, type="primary" if is_selected else "secondary", key=f"btn_at_{idx}"):
+                                st.session_state.filtro_atividade = ativ_nome
+                                st.rerun()
 
 # Atribuição dos filtros salvos na sessão para o restante do código
 filtro_setor = st.session_state.filtro_setor

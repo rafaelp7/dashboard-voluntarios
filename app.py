@@ -65,7 +65,6 @@ def gerar_pdf(titulo_relatorio, sessoes_dados):
         # Fallback para fpdf mais antigo
         return pdf.output(dest='S').encode('latin-1')
 
-
 # --- DICIONÁRIOS E CONSTANTES ---
 SETORES = {
     'Setor 1': [
@@ -213,14 +212,29 @@ if 'filtro_igreja' not in st.session_state:
 if 'filtro_atividade' not in st.session_state:
     st.session_state.filtro_atividade = 'Todas'
 
+# Função para resetar filtros ao trocar o período (Evita que o app quebre ao mudar de mês)
+def ao_mudar_periodo():
+    st.session_state.filtro_setor = 'Todos'
+    st.session_state.filtro_igreja = 'Todas'
+    st.session_state.filtro_atividade = 'Todas'
+
 # --- CABEÇALHO E MENU DESTACADO ---
 st.title("📊 Painel de Controle - Voluntários")
 
 with st.container(border=True):
     st.subheader("📅 Período de Análise")
-    col_data1, col_data2, _ = st.columns([2, 2, 6])
-    selected_mes = col_data1.selectbox("Selecione o Mês", ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"], index=5)
-    selected_ano = col_data2.selectbox("Selecione o Ano", ["2025", "2026", "2027", "2028"], index=1)
+    
+    col_data1, col_data2, col_btn, _ = st.columns([2, 2, 2, 4])
+    selected_mes = col_data1.selectbox("Selecione o Mês", ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"], index=5, on_change=ao_mudar_periodo)
+    selected_ano = col_data2.selectbox("Selecione o Ano", ["2025", "2026", "2027", "2028"], index=1, on_change=ao_mudar_periodo)
+    
+    # Botão para atualizar dados - Garante que se o arquivo foi modificado, o Streamlit recarregará!
+    with col_btn:
+        st.write("") # Adiciona um espacinho para alinhar com os selectboxes
+        st.write("") 
+        if st.button("🔄 Atualizar Dados", use_container_width=True):
+            st.cache_data.clear() # Limpa o cache para forçar a leitura do novo arquivo!
+            st.rerun()
     
     df_original = load_data(selected_mes, selected_ano)
     df_form = load_form_data()
@@ -493,8 +507,16 @@ if df_original is not None:
             erros_por_atividade.append({'Atividade': ativ, 'Taxa (%)': taxa, 'Erros': erros_totais, 'Lançamentos': lancamentos_totais})
             
         fig_erros = px.bar(pd.DataFrame(erros_por_atividade), x='Atividade', y='Taxa (%)', title="Taxa de Erro vs Lançamentos (Formulário Qualitativo)", hover_data=['Erros', 'Lançamentos'], text_auto='.1f', color='Taxa (%)', color_continuous_scale="Reds")
-        fig_erros.update_layout(coloraxis_showscale=False)
-        st.plotly_chart(fig_erros, use_container_width=True)
+        
+        # --- BLOQUEIO DE ZOOM PARA CELULARES ---
+        fig_erros.update_layout(
+            coloraxis_showscale=False,
+            dragmode=False, # Impede arrastar o gráfico (pan)
+            xaxis=dict(fixedrange=True), # Impede o zoom e scroll horizontal no eixo X
+            yaxis=dict(fixedrange=True)  # Impede o zoom e scroll vertical no eixo Y
+        )
+        # config={'displayModeBar': False} tira aquela barra flutuante do plotly, mantendo a tela mais limpa e impossibilitando ferramentas acidentais no celular
+        st.plotly_chart(fig_erros, use_container_width=True, config={'displayModeBar': False})
 
     # --- MÉTRICAS E AUDITORIA ---
     st.markdown("---")

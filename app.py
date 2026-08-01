@@ -96,6 +96,28 @@ ATIVIDADES_OBRIGATORIAS = ['LIMPEZA', 'GEM', 'PÁTIO']
 ATIVIDADES_ESPORADICAS = ['MANUTENÇÃO PREVENTIVA', 'ESPAÇO INFANTIL', 'COZINHA']
 IGREJAS_IGNORADAS = ['ADM - MARINGÁ - PR', 'PIA - MARINGÁ', 'BR 14-0601 - MARINGÁ - CENTRO']
 
+MAPEAMENTO_DIRETO = {
+    "4 - COZINHA": "COZINHA",
+    "2 - MANUTENÇÃO PREVENTIVA": "MANUTENÇÃO PREVENTIVA",
+    "4 - ANEXO - ADMINISTRATIVO": "MANUTENÇÃO PREVENTIVA",  # Ajuste para a categoria padrão desejada
+    "4 - ANEXO - INSTRUTORES GEL": "GEL",
+    "4 - ALMOXARIFADO - PIEDADE": "PIEDADE",
+    "4 - ANEXO - INSTRUTORES GEM": "GEM",
+    "4 - GEM": "GEM",
+    "4 - ANEXO - COZINHA": "COZINHA",
+    "4 - ANEXO - LIMPEZA": "LIMPEZA",
+    "4 - LIMPEZA": "LIMPEZA",
+    "4 - INSTRUTORES GEM": "GEM",
+    "4 - PÁTIO/ESTACIONAMENTO": "PÁTIO",
+    "4 - PÁTIO": "PÁTIO",
+    "2 - REFORMA CENTRAL": "REFORMA",
+    "4 - INSTRUTORES - GEM": "GEM",
+    "4 - ESPAÇO INFANTIL": "ESPAÇO INFANTIL",
+    "4 - EBI - ESPAÇO INFANTIL": "ESPAÇO INFANTIL",
+    "4 - EBI - ENSINO BÍBLICO INFANTIL -": "ESPAÇO INFANTIL",
+    "4 - PÁTIO EXTERNO/ESTACIONAMENTO": "PÁTIO",
+}
+
 # Mapeamento para os filtros fixos de atividade
 MAPEAMENTO_ATIVIDADES = {
     "LIMPEZA": ["LIMPEZA", "MPEZA", "MPESA"],
@@ -168,10 +190,19 @@ def load_data(mes, ano):
     df.columns = df.columns.str.strip()
     col_mapping = {'Localida': 'Localidade', 'Voluntá': 'Voluntario', 'Data Na': 'Data Nasc', 'H. Des': 'Horas Desconto'}
     df = df.rename(columns=lambda x: col_mapping.get(x, x))
+    
     if 'Valor' in df.columns and df['Valor'].dtype == object:
         df['Valor'] = df['Valor'].astype(str).str.replace('.', '').str.replace(',', '.').astype(float)
+        
     if 'Localidade' in df.columns:
         df['Setor'] = df['Localidade'].apply(classificar_setor)
+        
+    # --- HIGIENIZAÇÃO DA COLUNA LIVRO COM MAPEAMENTO DIRETO ---
+    if 'Livro' in df.columns:
+        df['Livro'] = df['Livro'].apply(
+            lambda x: MAPEAMENTO_DIRETO.get(str(x).strip().upper(), str(x).strip().upper()) if pd.notna(x) else x
+        )
+        
     return df
 
 @st.cache_data
@@ -228,12 +259,12 @@ with st.container(border=True):
     selected_mes = col_data1.selectbox("Selecione o Mês", ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"], index=5, on_change=ao_mudar_periodo)
     selected_ano = col_data2.selectbox("Selecione o Ano", ["2025", "2026", "2027", "2028"], index=1, on_change=ao_mudar_periodo)
     
-    # Botão para atualizar dados - Garante que se o arquivo foi modificado, o Streamlit recarregará!
+    # Botão para atualizar dados
     with col_btn:
-        st.write("") # Adiciona um espacinho para alinhar com os selectboxes
+        st.write("") 
         st.write("") 
         if st.button("🔄 Atualizar Dados", use_container_width=True):
-            st.cache_data.clear() # Limpa o cache para forçar a leitura do novo arquivo!
+            st.cache_data.clear() 
             st.rerun()
     
     df_original = load_data(selected_mes, selected_ano)
@@ -511,11 +542,10 @@ if df_original is not None:
         # --- BLOQUEIO DE ZOOM PARA CELULARES ---
         fig_erros.update_layout(
             coloraxis_showscale=False,
-            dragmode=False, # Impede arrastar o gráfico (pan)
-            xaxis=dict(fixedrange=True), # Impede o zoom e scroll horizontal no eixo X
-            yaxis=dict(fixedrange=True)  # Impede o zoom e scroll vertical no eixo Y
+            dragmode=False, 
+            xaxis=dict(fixedrange=True), 
+            yaxis=dict(fixedrange=True)  
         )
-        # config={'displayModeBar': False} tira aquela barra flutuante do plotly, mantendo a tela mais limpa e impossibilitando ferramentas acidentais no celular
         st.plotly_chart(fig_erros, use_container_width=True, config={'displayModeBar': False})
 
     # --- MÉTRICAS E AUDITORIA ---
@@ -530,12 +560,11 @@ if df_original is not None:
     col_kpi2.metric("Valor Total (R$)", f"R$ {total_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
     col_kpi3.metric("Ticket Médio (R$)", f"R$ {media_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
     
-    # --- RELATÓRIO GERAL (SUBSTITUI A AUDITORIA ANTIGA) ---
+    # --- RELATÓRIO GERAL ---
     st.markdown("---")
     st.subheader("📑 Geração de Relatório Consolidado (Tudo)")
     st.info("O arquivo gerado abaixo conterá todas as tabelas e métricas pendentes relativas aos filtros selecionados acima.")
     
-    # Montando a lista de seções para o PDF Geral
     sessoes_gerais = [
         ("Pendencias no Sistema (SIGA)", df_pendencias_siga),
         ("Pendencia de anexo no fechamento", df_pendencias_drive),

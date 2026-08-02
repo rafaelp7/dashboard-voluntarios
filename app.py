@@ -132,12 +132,12 @@ def classificar_setor(localidade):
     return 'Não Classificado'
 
 # --- FUNÇÕES DE CARREGAMENTO DE DADOS ---
-
 @st.cache_data(ttl=3600)
 def load_arquivos_relatorio(mes, ano):
     """
-    Lê o relatório de anexos gerado pelo GitHub Actions.
-    Substitui a verificação direta no Google Drive.
+    Lê o relatório de anexos (Excel).
+    Espera-se que o relatório tenha uma coluna para a Igreja e colunas 
+    com o nome das atividades contendo valores numéricos (>0 = anexado).
     """
     nome_arquivo = f"relatorio anexos {mes}-{ano}.xlsx"
     arquivos_encontrados = {}
@@ -145,36 +145,38 @@ def load_arquivos_relatorio(mes, ano):
     try:
         df = pd.read_excel(nome_arquivo)
         
-        # Tenta inferir dinamicamente qual é a coluna da Igreja e a do Arquivo
+        # Inferir a coluna da Igreja
         col_igreja = df.columns[0]
-        col_arquivo = df.columns[1] if len(df.columns) > 1 else None
-        
         for c in df.columns:
-            c_upper = str(c).upper()
-            if any(x in c_upper for x in ['IGREJA', 'LOCALIDADE', 'CÓDIGO']):
+            if any(x in str(c).upper() for x in ['IGREJA', 'LOCALIDADE', 'CÓDIGO']):
                 col_igreja = c
-            elif any(x in c_upper for x in ['ARQUIVO', 'NOME', 'ANEXO', 'DOCUMENTO']):
-                col_arquivo = c
+                break
                 
-        if col_igreja and col_arquivo:
-            for _, row in df.iterrows():
-                igreja_str = str(row[col_igreja]).strip()
-                # Extrai apenas o código da igreja (ex: BR 14-0602)
-                igreja_cod = igreja_str.split(' - ')[0].strip().upper() if '-' in igreja_str else igreja_str.upper()
-                arq_nome = str(row[col_arquivo]).upper()
-                
-                if pd.notna(row[col_arquivo]) and arq_nome != "NAN":
-                    if igreja_cod not in arquivos_encontrados:
-                        arquivos_encontrados[igreja_cod] = []
-                    
-                    # Se o github agrupar os arquivos por vírgula na mesma célula
-                    if ',' in arq_nome:
-                        arquivos_encontrados[igreja_cod].extend([x.strip() for x in arq_nome.split(',')])
-                    else:
-                        arquivos_encontrados[igreja_cod].append(arq_nome)
+        # Iterar sobre as linhas do relatório
+        for _, row in df.iterrows():
+            igreja_str = str(row[col_igreja]).strip()
+            # Extrai apenas o código da igreja (ex: BR 14-0602)
+            igreja_cod = igreja_str.split(' - ')[0].strip().upper() if '-' in igreja_str else igreja_str.upper()
+            
+            # Inicializa o dicionário para esta igreja
+            arquivos_encontrados[igreja_cod] = {}
+            
+            # Varre as outras colunas (que devem ser as contagens das atividades)
+            for col in df.columns:
+                if col != col_igreja:
+                    col_name = str(col).strip().upper()
+                    valor = row[col]
+                    # Tenta converter para número, se falhar ou for NaN, assume 0
+                    try:
+                        num = float(valor)
+                        if pd.isna(num): num = 0
+                    except (ValueError, TypeError):
+                        num = 0
+                        
+                    arquivos_encontrados[igreja_cod][col_name] = num
                         
     except FileNotFoundError:
-        st.warning(f"⚠️ Relatório de anexos não encontrado para este período: '{nome_arquivo}'. O status de anexos aparecerá vazio.")
+        st.warning(f"⚠️ Relatório de anexos não encontrado para este período: '{nome_arquivo}'. As pendências de anexo serão avaliadas como 0 (não anexado).")
     except Exception as e:
         st.error(f"Erro ao ler o relatório de anexos '{nome_arquivo}': {e}")
         
@@ -363,33 +365,74 @@ if df_original is not None:
             
         codigo_igreja = str(igreja_completa).split(' - ')[0].strip()
         atividades_lancadas = [str(a).upper() for a in row['Livro']]
-        arquivos_desta_igreja = arquivos_anexos.get(codigo_igreja, [])
         
-        # A) Verifica Falta no SIGA
+        # Pega o dicionário de contagens para esta igreja. Se não existir, retorna um dict vazio.
+        contagens_igreja = arquivos_anexos.get(codigo_igreja, {})
+        
+        # A) Verifica Falta no SIGA (Mantido original)
         falta_siga = []
         for atv in ATIVIDADES_OBRIGATORIAS:
             if not any(atv in lancado for lancado in atividades_lancadas): falta_siga.append(atv)
                 
+        # Para atividades esporádicas, vamos verificar se o relatório indica que houve anexo (>0)
+        # Se houve anexo mas não está no SIGA, é falta no SIGA.
         for atv_esp in ATIVIDADES_ESPORADICAS:
             if not any(atv_esp in lancado for lancado in atividades_lancadas):
-                if atv_esp == "MANUTENÇÃO PREVENTIVA" and any(x in arq for arq in arquivos_desta_igreja for x in ['MANUT', 'MAN.', 'PREVENT']): falta_siga.append(atv_esp)
-                elif atv_esp == "ESPAÇO INFANTIL" and any(x in arq for arq in arquivos_desta_igreja for x in ['INFA', 'EBI', 'E.B.I']): falta_siga.append(atv_esp)
-                elif atv_esp == "COZINHA" and any('COZINHA' in arq for arq in arquivos_desta_igreja): falta_siga.append(atv_esp)
+                # Função auxiliar para verificar as colunas do relatório
+                def verificar_contagem_esporadica(atividade):
+                    for col_name, count in contagens_igreja.items():
+                        if atividade in col_name and count > 0:
+                            return True
+                    return False
+
+                if atv_esp == "MANUTENÇÃO PREVENTIVA":
+                    for col_name, count in contagens_igreja.items():
+                        if any(x in col_name for x in ['MANUT', 'MAN.', 'PREVENT']) and count > 0:
+                            falta_siga.append(atv_esp)
+                            break
+                elif atv_esp == "ESPAÇO INFANTIL":
+                    for col_name, count in contagens_igreja.items():
+                        if any(x in col_name for x in ['INFA', 'EBI', 'E.B.I']) and count > 0:
+                            falta_siga.append(atv_esp)
+                            break
+                elif atv_esp == "COZINHA":
+                    if verificar_contagem_esporadica("COZINHA"):
+                        falta_siga.append(atv_esp)
 
         if falta_siga: pendencias_siga.append({'Setor': setor, 'Igreja': igreja_completa, 'Falta Lançar no Sistema': ", ".join(falta_siga)})
 
-        # B) Verifica Falta de PDF (Anexo)
+        # B) Verifica Falta de PDF (Anexo) com base nas contagens do relatório
         falta_drive = []
         for lancado in atividades_lancadas:
             encontrou = False
-            if 'ESTAC' in lancado or 'PÁTIO' in lancado or 'PATIO' in lancado: encontrou = any(('ESTAC' in arq or 'PÁTIO' in arq or 'PATIO' in arq) and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
-            elif 'GEM' in lancado or 'G.E.M' in lancado: encontrou = any(('GEM' in arq or 'G.E.M' in arq) and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
-            elif 'MPEZA' in lancado or 'MPESA' in lancado: encontrou = any(('MPEZA' in arq or 'MPESA' in arq) and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
-            elif 'COZINHA' in lancado: encontrou = any('COZINHA' in arq and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
-            elif 'INFA' in lancado or 'EBI' in lancado or 'E.B.I' in lancado: encontrou = any(('INFA' in arq or 'EBI' in arq or 'E.B.I' in arq) and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
-            elif 'MAN' in lancado: encontrou = any('MAN' in arq and 'OCORRENC' not in arq and 'RELAT' not in arq for arq in arquivos_desta_igreja)
-            else: encontrou = True
+            
+            # Função para buscar nas chaves do dicionário de contagens
+            def buscar_nas_contagens(termos_busca):
+                for termo in termos_busca:
+                    for col_name, count in contagens_igreja.items():
+                         # Evita pegar colunas de ocorrencia ou relatório geral caso existam
+                        if termo in col_name and 'OCORRENC' not in col_name and 'RELAT' not in col_name:
+                            if count > 0:
+                                return True
+                return False
 
+            if 'ESTAC' in lancado or 'PÁTIO' in lancado or 'PATIO' in lancado: 
+                encontrou = buscar_nas_contagens(['ESTAC', 'PÁTIO', 'PATIO'])
+            elif 'GEM' in lancado or 'G.E.M' in lancado: 
+                encontrou = buscar_nas_contagens(['GEM', 'G.E.M'])
+            elif 'MPEZA' in lancado or 'MPESA' in lancado: 
+                encontrou = buscar_nas_contagens(['MPEZA', 'MPESA'])
+            elif 'COZINHA' in lancado: 
+                encontrou = buscar_nas_contagens(['COZINHA'])
+            elif 'INFA' in lancado or 'EBI' in lancado or 'E.B.I' in lancado: 
+                encontrou = buscar_nas_contagens(['INFA', 'EBI', 'E.B.I'])
+            elif 'MAN' in lancado: 
+                encontrou = buscar_nas_contagens(['MAN'])
+            else: 
+                # Se for uma atividade que não monitoramos especificamente, ignoramos
+                encontrou = True
+
+            # Se a atividade for obrigatória ou esporádica e não encontrou anexo (>0)
             if not encontrou and any(base in lancado for base in ATIVIDADES_OBRIGATORIAS + ATIVIDADES_ESPORADICAS):
                 falta_drive.append(lancado)
 
@@ -494,13 +537,22 @@ if df_original is not None:
                     for atv in df_igreja_siga['Livro'].dropna(): atividades_exigidas.add(str(atv).upper())
                 
                 cod_ig = str(igreja).split(' - ')[0].strip()
-                arqs_ig = arquivos_anexos.get(cod_ig, [])
-                if any('ESTAC' in a or 'PÁTIO' in a or 'PATIO' in a for a in arqs_ig): atividades_exigidas.add("PÁTIO")
-                if any('GEM' in a or 'G.E.M' in a for a in arqs_ig): atividades_exigidas.add("GEM")
-                if any('MPEZA' in a or 'MPESA' in a for a in arqs_ig): atividades_exigidas.add("LIMPEZA")
-                if any('COZINHA' in a for a in arqs_ig): atividades_exigidas.add("COZINHA")
-                if any('INFA' in a or 'EBI' in a for a in arqs_ig): atividades_exigidas.add("ESPAÇO INFANTIL")
-                if any('MAN' in a for a in arqs_ig): atividades_exigidas.add("MANUTENÇÃO PREVENTIVA")
+                # Para o Forms, também verificamos se houve anexo para atividades não obrigatórias
+                contagens_ig = arquivos_anexos.get(cod_ig, {})
+                
+                def buscar_nas_contagens_form(termos_busca):
+                    for termo in termos_busca:
+                        for col_name, count in contagens_ig.items():
+                            if termo in col_name and count > 0:
+                                return True
+                    return False
+
+                if buscar_nas_contagens_form(['ESTAC', 'PÁTIO', 'PATIO']): atividades_exigidas.add("PÁTIO")
+                if buscar_nas_contagens_form(['GEM', 'G.E.M']): atividades_exigidas.add("GEM")
+                if buscar_nas_contagens_form(['MPEZA', 'MPESA']): atividades_exigidas.add("LIMPEZA")
+                if buscar_nas_contagens_form(['COZINHA']): atividades_exigidas.add("COZINHA")
+                if buscar_nas_contagens_form(['INFA', 'EBI', 'E.B.I']): atividades_exigidas.add("ESPAÇO INFANTIL")
+                if buscar_nas_contagens_form(['MAN']): atividades_exigidas.add("MANUTENÇÃO PREVENTIVA")
 
                 respostas_igreja = df_form_mes[df_form_mes['Igreja_Identificada'] == igreja]
                 texto_marcado = " ".join([str(x).upper() for col in colunas_analisadas for x in respostas_igreja[col].dropna().tolist()])

@@ -2,9 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
-import json
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
 import io
 from fpdf import FPDF # Importação para gerar os PDFs
 
@@ -134,51 +131,55 @@ def classificar_setor(localidade):
             return setor
     return 'Não Classificado'
 
-# --- CONEXÃO COM O GOOGLE DRIVE (SERVICE ACCOUNT) ---
-@st.cache_resource
-def get_drive_service():
-    try:
-        creds_json = st.secrets["GCP_CREDENTIALS"]
-        creds_dict = json.loads(creds_json)
-        credentials = service_account.Credentials.from_service_account_info(
-            creds_dict, 
-            scopes=['https://www.googleapis.com/auth/drive.readonly']
-        )
-        return build('drive', 'v3', credentials=credentials)
-    except Exception as e:
-        st.warning("⚠️ Credenciais do Google Drive (GCP_CREDENTIALS) não configuradas ou incorretas nos Secrets.")
-        return None
+# --- FUNÇÕES DE CARREGAMENTO DE DADOS ---
 
 @st.cache_data(ttl=3600)
-def fetch_google_drive_data(mes_ano, pasta_raiz_id="1vIBw5h1iuqGyRXBCrKl9kZORfVJzLlQ5"):
-    service = get_drive_service()
-    if not service: return {}
+def load_arquivos_relatorio(mes, ano):
+    """
+    Lê o relatório de anexos gerado pelo GitHub Actions.
+    Substitui a verificação direta no Google Drive.
+    """
+    nome_arquivo = f"relatorio anexos {mes}-{ano}.xlsx"
     arquivos_encontrados = {}
+    
     try:
-        query_mes = f"name = '{mes_ano}' and '{pasta_raiz_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-        results_mes = service.files().list(q=query_mes, fields="files(id, name)").execute()
-        pastas_mes = results_mes.get('files', [])
-        if not pastas_mes: return {}
-        pasta_mes_id = pastas_mes[0]['id']
+        df = pd.read_excel(nome_arquivo)
         
-        query_setores = f"'{pasta_mes_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-        results_setores = service.files().list(q=query_setores, fields="files(id, name)").execute()
+        # Tenta inferir dinamicamente qual é a coluna da Igreja e a do Arquivo
+        col_igreja = df.columns[0]
+        col_arquivo = df.columns[1] if len(df.columns) > 1 else None
         
-        for setor in results_setores.get('files', []):
-            query_igrejas = f"'{setor['id']}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-            results_igrejas = service.files().list(q=query_igrejas, fields="files(id, name)").execute()
-            
-            for igreja in results_igrejas.get('files', []):
-                query_arquivos = f"'{igreja['id']}' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed = false"
-                results_arquivos = service.files().list(q=query_arquivos, fields="files(name)").execute()
-                lista_arquivos = [arq['name'].upper() for arq in results_arquivos.get('files', [])]
-                codigo_igreja = igreja['name'].split(' - ')[0].strip()
-                arquivos_encontrados[codigo_igreja] = lista_arquivos
+        for c in df.columns:
+            c_upper = str(c).upper()
+            if any(x in c_upper for x in ['IGREJA', 'LOCALIDADE', 'CÓDIGO']):
+                col_igreja = c
+            elif any(x in c_upper for x in ['ARQUIVO', 'NOME', 'ANEXO', 'DOCUMENTO']):
+                col_arquivo = c
+                
+        if col_igreja and col_arquivo:
+            for _, row in df.iterrows():
+                igreja_str = str(row[col_igreja]).strip()
+                # Extrai apenas o código da igreja (ex: BR 14-0602)
+                igreja_cod = igreja_str.split(' - ')[0].strip().upper() if '-' in igreja_str else igreja_str.upper()
+                arq_nome = str(row[col_arquivo]).upper()
+                
+                if pd.notna(row[col_arquivo]) and arq_nome != "NAN":
+                    if igreja_cod not in arquivos_encontrados:
+                        arquivos_encontrados[igreja_cod] = []
+                    
+                    # Se o github agrupar os arquivos por vírgula na mesma célula
+                    if ',' in arq_nome:
+                        arquivos_encontrados[igreja_cod].extend([x.strip() for x in arq_nome.split(',')])
+                    else:
+                        arquivos_encontrados[igreja_cod].append(arq_nome)
+                        
+    except FileNotFoundError:
+        st.warning(f"⚠️ Relatório de anexos não encontrado para este período: '{nome_arquivo}'. O status de anexos aparecerá vazio.")
     except Exception as e:
-        st.error(f"Erro ao acessar o Drive: {e}")
+        st.error(f"Erro ao ler o relatório de anexos '{nome_arquivo}': {e}")
+        
     return arquivos_encontrados
 
-# --- FUNÇÕES DE CARREGAMENTO DE DADOS ---
 @st.cache_data
 def load_data(mes, ano):
     nome_arquivo = f"tabela {mes}-{ano}.xlsx"
@@ -350,7 +351,8 @@ if df_original is not None:
         st.error("A coluna 'Livro' não foi encontrada na planilha do SIGA.")
         siga_lancamentos = pd.DataFrame(columns=['Setor', 'Localidade', 'Livro'])
     
-    arquivos_drive = fetch_google_drive_data(f"{selected_mes}-{selected_ano}")
+    # Busca os anexos do arquivo Excel gerado via Github Actions
+    arquivos_anexos = load_arquivos_relatorio(selected_mes, selected_ano)
     pendencias_siga = []
     pendencias_drive = []
     
@@ -361,7 +363,7 @@ if df_original is not None:
             
         codigo_igreja = str(igreja_completa).split(' - ')[0].strip()
         atividades_lancadas = [str(a).upper() for a in row['Livro']]
-        arquivos_desta_igreja = arquivos_drive.get(codigo_igreja, [])
+        arquivos_desta_igreja = arquivos_anexos.get(codigo_igreja, [])
         
         # A) Verifica Falta no SIGA
         falta_siga = []
@@ -406,7 +408,6 @@ if df_original is not None:
             regex_drive = '|'.join(palavras_chave_drive)
             df_pendencias_drive = df_pendencias_drive[df_pendencias_drive['Falta Anexar PDF no Drive'].str.upper().str.contains(regex_drive, regex=True, na=False)]
 
-
     # EXIBIÇÃO: PENDÊNCIAS SISTEMA
     with st.expander(f"⚠️ {len(df_pendencias_siga)} congregações com pendências no Sistema (SIGA)"):
         if not df_pendencias_siga.empty: 
@@ -416,14 +417,14 @@ if df_original is not None:
         else: 
             st.success("Tudo certo no SIGA para os filtros selecionados!")
 
-    # EXIBIÇÃO: PENDÊNCIAS DRIVE
+    # EXIBIÇÃO: PENDÊNCIAS DRIVE (AGORA BASEADO NO RELATÓRIO DO GITHUB)
     with st.expander(f"📁 {len(df_pendencias_drive)} Pendencia de anexo no fechamento mensal"):
         if not df_pendencias_drive.empty: 
             st.dataframe(df_pendencias_drive, use_container_width=True, hide_index=True)
-            pdf_bytes = gerar_pdf("Pendencia de anexo no fechamento", [("Pendências Drive", df_pendencias_drive)])
-            st.download_button("📥 Gerar PDF (Pendências Drive)", data=pdf_bytes, file_name="Pendencias_Drive.pdf", mime="application/pdf")
+            pdf_bytes = gerar_pdf("Pendencia de anexo no fechamento", [("Pendências Anexos", df_pendencias_drive)])
+            st.download_button("📥 Gerar PDF (Pendências Anexos)", data=pdf_bytes, file_name="Pendencias_Anexos.pdf", mime="application/pdf")
         else: 
-            st.success("Todos os lançamentos filtrados possuem arquivo correspondente no Drive!")
+            st.success("Todos os lançamentos filtrados possuem arquivo correspondente no Relatório de Anexos!")
 
     # --- FECHAMENTO MENSAL ---
     st.markdown("---")
@@ -493,7 +494,7 @@ if df_original is not None:
                     for atv in df_igreja_siga['Livro'].dropna(): atividades_exigidas.add(str(atv).upper())
                 
                 cod_ig = str(igreja).split(' - ')[0].strip()
-                arqs_ig = arquivos_drive.get(cod_ig, [])
+                arqs_ig = arquivos_anexos.get(cod_ig, [])
                 if any('ESTAC' in a or 'PÁTIO' in a or 'PATIO' in a for a in arqs_ig): atividades_exigidas.add("PÁTIO")
                 if any('GEM' in a or 'G.E.M' in a for a in arqs_ig): atividades_exigidas.add("GEM")
                 if any('MPEZA' in a or 'MPESA' in a for a in arqs_ig): atividades_exigidas.add("LIMPEZA")
@@ -584,4 +585,5 @@ if df_original is not None:
         type="primary"
     )
 
-else: st.error(f"⚠️ Base de dados não encontrada: 'tabela {selected_mes}-{selected_ano}.xlsx'.")
+else: 
+    st.error(f"⚠️ Base de dados principal não encontrada: 'tabela {selected_mes}-{selected_ano}.xlsx'.")

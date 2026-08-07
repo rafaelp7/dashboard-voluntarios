@@ -577,16 +577,6 @@ if df_original is not None:
             st.download_button("📥 Gerar PDF (Pendências Categoria SIGA)", data=pdf_bytes, file_name="Pendencias_Categoria_SIGA.pdf", mime="application/pdf")
         else: 
             st.success("Tudo certo no SIGA para as categorias avaliadas nos filtros selecionados!")
-            
-    # NOVO EXIBIÇÃO: PENDÊNCIAS DE QUANTIDADE DE LANÇAMENTOS (ESPERADO X REALIZADO)
-    with st.expander(f"📉 {len(df_pendencias_qnt)} Pendências por Quantidade de Lançamentos (< 14 da diferença esperada)"):
-        if not df_pendencias_qnt.empty:
-            st.info("O cálculo verifica se (Quantidade Esperada no Anexo) - (Lançamentos no Sistema) >= 14.")
-            st.dataframe(df_pendencias_qnt, use_container_width=True, hide_index=True)
-            pdf_bytes = gerar_pdf("Pendencias de Quantidade de Lancamentos", [("Diferença Lançado vs Esperado", df_pendencias_qnt)])
-            st.download_button("📥 Gerar PDF (Pendências Quantidade)", data=pdf_bytes, file_name="Pendencias_Quantidade_Lancamentos.pdf", mime="application/pdf")
-        else:
-            st.success("Nenhuma pendência de quantidade de lançamentos encontrada. Todas as igrejas parecem ter lançado os voluntários proporcionalmente ao indicado no anexo.")
 
     # EXIBIÇÃO: PENDÊNCIAS DRIVE 
     with st.expander(f"📁 {len(df_pendencias_drive)} Pendencia de anexo no fechamento mensal"):
@@ -739,6 +729,19 @@ if df_original is not None:
     col_kpi2.metric("Valor Total (R$)", f"R$ {total_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
     col_kpi3.metric("Ticket Médio (R$)", f"R$ {media_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
     
+    # --- ALERTAS DE QUANTIDADE (FINAL DA PÁGINA) ---
+    st.markdown("---")
+    st.subheader("🚨 Alertas de Verificação (Diferença de Quantidades)")
+    st.warning("⚠️ **Aviso Importante para Verificação Manual:** O valor esperado de lançamentos (vindo da planilha de anexos) é calculado por páginas. Se, por algum motivo, um anexo for enviado com páginas a mais (ex: páginas adicionais em branco, canceladas ou preenchidas incorretamente na origem), isso levará a um alerta de falso positivo nesta seção. Utilize esta lista apenas para verificação manual de possíveis esquecimentos na digitação.")
+    
+    with st.expander(f"📉 {len(df_pendencias_qnt)} Alertas de Quantidade de Lançamentos (Diferença Esperado vs Realizado >= 14)"):
+        if not df_pendencias_qnt.empty:
+            st.dataframe(df_pendencias_qnt, use_container_width=True, hide_index=True)
+            pdf_bytes = gerar_pdf("Alertas de Quantidade de Lancamentos", [("Diferença Lançado vs Esperado", df_pendencias_qnt)])
+            st.download_button("📥 Gerar PDF (Alertas Quantidade)", data=pdf_bytes, file_name="Alertas_Quantidade_Lancamentos.pdf", mime="application/pdf")
+        else:
+            st.success("Nenhum alerta de quantidade de lançamentos encontrado. Todas as igrejas parecem ter lançado os voluntários proporcionalmente ao indicado no anexo.")
+
     # --- RELATÓRIO GERAL ---
     st.markdown("---")
     st.subheader("📑 Geração de Relatório Consolidado (Tudo)")

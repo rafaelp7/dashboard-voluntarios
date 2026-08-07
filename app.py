@@ -449,8 +449,8 @@ if df_original is not None:
                 encontrou = buscar_nas_contagens(['COZINHA'])
             elif 'INFA' in lancado or 'EBI' in lancado or 'E.B.I' in lancado: 
                 encontrou = buscar_nas_contagens(['INFA', 'EBI', 'E.B.I'])
-            elif 'MANU' in lancado: 
-                encontrou = buscar_nas_contagens(['MANU'])
+            elif 'MANUT' in lancado: 
+                encontrou = buscar_nas_contagens(['MANUT'])
             else: 
                 # Se for uma atividade que não monitoramos especificamente, ignoramos
                 encontrou = True
@@ -573,7 +573,7 @@ if df_original is not None:
                 if buscar_nas_contagens_form(['MPEZA', 'MPESA']): atividades_exigidas.add("LIMPEZA")
                 if buscar_nas_contagens_form(['COZINHA']): atividades_exigidas.add("COZINHA")
                 if buscar_nas_contagens_form(['INFA', 'EBI', 'E.B.I']): atividades_exigidas.add("ESPAÇO INFANTIL")
-                if buscar_nas_contagens_form(['MANU']): atividades_exigidas.add("MANUTENÇÃO PREVENTIVA")
+                if buscar_nas_contagens_form(['MANUT']): atividades_exigidas.add("MANUTENÇÃO PREVENTIVA")
 
                 respostas_igreja = df_form_mes[df_form_mes['Igreja_Identificada'] == igreja]
                 texto_marcado = " ".join([str(x).upper() for col in colunas_analisadas for x in respostas_igreja[col].dropna().tolist()])

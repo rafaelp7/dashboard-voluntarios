@@ -731,7 +731,7 @@ if df_original is not None:
     
     # --- ALERTAS DE QUANTIDADE (FINAL DA PÁGINA) ---
     st.markdown("---")
-    st.subheader("🚨 Alertas de Verificação (Diferença de Quantidades)")
+    st.subheader("Alertas de Verificação (Diferença de Quantidades)")
     st.warning("⚠️ **Aviso Importante para Verificação Manual:** O valor esperado de lançamentos (vindo da planilha de anexos) é calculado por páginas. Se, por algum motivo, um anexo for enviado com páginas a mais (ex: páginas adicionais em branco, canceladas ou preenchidas incorretamente na origem), isso levará a um alerta de falso positivo nesta seção. Utilize esta lista apenas para verificação manual de possíveis esquecimentos na digitação.")
     
     with st.expander(f"📉 {len(df_pendencias_qnt)} Alertas de Quantidade de Lançamentos (Diferença Esperado vs Realizado >= 14)"):

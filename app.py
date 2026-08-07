@@ -706,7 +706,7 @@ if df_original is not None:
             taxa = (erros_totais / lancamentos_totais * 100) if lancamentos_totais > 0 else 0
             erros_por_atividade.append({'Atividade': ativ, 'Taxa (%)': taxa, 'Erros': erros_totais, 'Lançamentos': lancamentos_totais})
             
-        fig_erros = px.bar(pd.DataFrame(erros_por_atividade), x='Atividade', y='Taxa (%)', title="Taxa de Erro vs Lançamentos (Formulário Qualitativo)", hover_data=['Erros', 'Lançamentos'], text_auto='.1f', color='Taxa (%)', color_continuous_scale="Reds")
+        fig_erros = px.bar(pd.DataFrame(erros_por_atividade), x='Atividade', y='Taxa (%)', title="Taxa de Erro vs Lançamentos (Formulário Qualitativo) - Clique na barra para detalhar", hover_data=['Erros', 'Lançamentos'], text_auto='.1f', color='Taxa (%)', color_continuous_scale="Reds")
         
         # --- BLOQUEIO DE ZOOM PARA CELULARES ---
         fig_erros.update_layout(
@@ -715,7 +715,61 @@ if df_original is not None:
             xaxis=dict(fixedrange=True), 
             yaxis=dict(fixedrange=True)  
         )
-        st.plotly_chart(fig_erros, use_container_width=True, config={'displayModeBar': False})
+        
+        # 1. RENDERIZA O GRÁFICO E CAPTURA O CLIQUE (Requer Streamlit >= 1.35)
+        eventos = st.plotly_chart(
+            fig_erros, 
+            use_container_width=True, 
+            config={'displayModeBar': False},
+            on_select="rerun" # Isso faz o app recarregar capturando a barra selecionada
+        )
+
+        # 2. LÓGICA DO DRILL-DOWN (DETALHAMENTO POR IGREJA)
+        # Só exibe se não houver filtro de igreja específico e se alguma barra foi clicada
+        if filtro_igreja == "Todas" and eventos and len(eventos.selection.points) > 0:
+            atividade_selecionada = eventos.selection.points[0]["x"]
+            
+            st.markdown("---")
+            st.markdown(f"### 🔍 Origem dos Erros: {atividade_selecionada}")
+            
+            erros_por_igreja = []
+            col_alvo_detalhe = [c for c in df_form_mes.columns if atividade_selecionada.upper() in str(c).upper() and ('RASURA' in str(c).upper() or 'ERRO' in str(c).upper() or 'BRANCO' in str(c).upper())]
+            
+            # Vasculha as igrejas para somar os erros especificamente para a atividade clicada
+            for ig in df_form_mes['Igreja_Identificada'].dropna().unique():
+                df_ig_form = df_form_mes[df_form_mes['Igreja_Identificada'] == ig]
+                erros_ig = 0
+                for col in col_alvo_detalhe:
+                    erros_ig += pd.to_numeric(df_ig_form[col], errors='coerce').sum()
+                
+                if erros_ig > 0:
+                    erros_por_igreja.append({'Igreja': ig, 'Erros': erros_ig})
+            
+            # Se houver erros, gera o gráfico secundário
+            if erros_por_igreja:
+                df_erros_detalhe = pd.DataFrame(erros_por_igreja).sort_values(by='Erros', ascending=True) # Ascending para o gráfico horizontal deixar o maior no topo
+                
+                fig_detalhe = px.bar(
+                    df_erros_detalhe, 
+                    x='Erros', 
+                    y='Igreja', 
+                    orientation='h', 
+                    title=f"Igrejas com erros apontados em {atividade_selecionada}",
+                    text_auto=True,
+                    color='Erros',
+                    color_continuous_scale="Reds"
+                )
+                
+                fig_detalhe.update_layout(
+                    coloraxis_showscale=False, 
+                    dragmode=False,
+                    xaxis=dict(fixedrange=True),
+                    yaxis=dict(fixedrange=True)
+                )
+                
+                st.plotly_chart(fig_detalhe, use_container_width=True, config={'displayModeBar': False})
+            else:
+                st.info(f"Nenhum erro detalhado encontrado para a atividade: {atividade_selecionada}.")
 
     # --- MÉTRICAS E AUDITORIA ---
     st.markdown("---")

@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -435,9 +436,9 @@ if df_original is not None:
                 regex_pattern = '|'.join(ativ_variacoes)
                 qtd_lancada = dados_siga_igreja[dados_siga_igreja['Livro'].astype(str).str.upper().str.contains(regex_pattern, regex=True, na=False)].shape[0]
                 
-                # 2. Descobre quantas páginas foram informadas no relatório de anexos
+                # 2. Descobre quantas páginas foram informadas no relatório de anexos (AQUI JÁ É A QTD ESPERADA)
                 # Procura uma coluna no relatorio de anexos que corresponda à atividade
-                paginas_informadas = 0
+                qtd_esperada = 0
                 coluna_encontrada = None
                 
                 for col in df_anexos_qnt.columns:
@@ -449,16 +450,15 @@ if df_original is not None:
                     if any(var in col_upper for var in ativ_variacoes):
                         try:
                             # Considera a primeira que achar
-                            paginas_informadas = float(linha_anexo[col])
-                            if pd.isna(paginas_informadas): paginas_informadas = 0
+                            qtd_esperada = float(linha_anexo[col])
+                            if pd.isna(qtd_esperada): qtd_esperada = 0
                             coluna_encontrada = col
                             break # Achou a coluna, para de procurar
                         except (ValueError, TypeError):
-                            paginas_informadas = 0
+                            qtd_esperada = 0
                             
                 # Se informou que tem página
-                if paginas_informadas > 0:
-                    qtd_esperada = paginas_informadas * 14
+                if qtd_esperada > 0:
                     
                     # 3. Faz o batimento: se a diferença (Esperado - Lançado) for >= 14, é pendência
                     diferenca = qtd_esperada - qtd_lancada
@@ -468,8 +468,7 @@ if df_original is not None:
                             'Setor': setor_igreja,
                             'Igreja': igreja_completa,
                             'Atividade': ativ_chave,
-                            'Páginas Informadas (Anexos)': paginas_informadas,
-                            'Qtd Esperada (Páginas x 14)': int(qtd_esperada),
+                            'Lançamentos Informados (Anexos)': int(qtd_esperada),
                             'Qtd Lançada (Sistema)': int(qtd_lancada),
                             'Diferença (Faltam)': int(diferenca)
                         })
@@ -582,12 +581,12 @@ if df_original is not None:
     # NOVO EXIBIÇÃO: PENDÊNCIAS DE QUANTIDADE DE LANÇAMENTOS (ESPERADO X REALIZADO)
     with st.expander(f"📉 {len(df_pendencias_qnt)} Pendências por Quantidade de Lançamentos (< 14 da diferença esperada)"):
         if not df_pendencias_qnt.empty:
-            st.info("O cálculo verifica se (Páginas Informadas * 14) - (Lançamentos no Sistema) >= 14.")
+            st.info("O cálculo verifica se (Quantidade Esperada no Anexo) - (Lançamentos no Sistema) >= 14.")
             st.dataframe(df_pendencias_qnt, use_container_width=True, hide_index=True)
             pdf_bytes = gerar_pdf("Pendencias de Quantidade de Lancamentos", [("Diferença Lançado vs Esperado", df_pendencias_qnt)])
             st.download_button("📥 Gerar PDF (Pendências Quantidade)", data=pdf_bytes, file_name="Pendencias_Quantidade_Lancamentos.pdf", mime="application/pdf")
         else:
-            st.success("Nenhuma pendência de quantidade de lançamentos encontrada. Todas as igrejas parecem ter lançado os voluntários proporcionalmente às páginas anexadas.")
+            st.success("Nenhuma pendência de quantidade de lançamentos encontrada. Todas as igrejas parecem ter lançado os voluntários proporcionalmente ao indicado no anexo.")
 
     # EXIBIÇÃO: PENDÊNCIAS DRIVE 
     with st.expander(f"📁 {len(df_pendencias_drive)} Pendencia de anexo no fechamento mensal"):

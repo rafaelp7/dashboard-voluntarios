@@ -4,6 +4,7 @@ import plotly.express as px
 from datetime import datetime
 import io
 import os
+import math
 from fpdf import FPDF # Importação para gerar os PDFs
 
 # --- CONFIGURAÇÕES DA PÁGINA ---
@@ -116,7 +117,7 @@ MAPEAMENTO_DIRETO = {
     "4 - PÁTIO EXTERNO/ESTACIONAMENTO": "PÁTIO",
 }
 
-# Mapeamento para os filtros fixos de atividade
+# Mapeamento para os filtros fixos de atividade e também para as colunas do relatório de anexos
 MAPEAMENTO_ATIVIDADES = {
     "LIMPEZA": ["LIMPEZA", "MPEZA", "MPESA"],
     "GEM": ["GEM", "G.E.M"],
@@ -137,6 +138,9 @@ def classificar_setor(localidade):
 def load_arquivos_relatorio(mes, ano):
     """
     Lê o relatório de anexos (Excel ou ODS).
+    Retorna dois objetos:
+    1. arquivos_encontrados: Dicionário com contagens simples (0 ou >0) para verificar se houve anexo.
+    2. df_anexos_raw: O DataFrame bruto lido, para podermos usar as colunas originais na contagem de páginas.
     """
     nome_xlsx = f"relatorio anexos {mes}-{ano}.xlsx"
     nome_ods = f"relatorio anexos {mes}-{ano}.ods"
@@ -153,7 +157,9 @@ def load_arquivos_relatorio(mes, ano):
         df = pd.read_excel(nome_arquivo, engine="odf")
     else:
         st.warning(f"⚠️ Relatório de anexos não encontrado para este período: '{nome_xlsx}' ou '{nome_ods}'. As pendências de anexo serão avaliadas como 0.")
-        return arquivos_encontrados
+        return arquivos_encontrados, None
+    
+    df_raw = df.copy() # Guarda o dataframe original
     
     try:
         # Inferir a coluna da Igreja
@@ -163,6 +169,9 @@ def load_arquivos_relatorio(mes, ano):
                 col_igreja = c
                 break
                 
+        # Renomeia a coluna da igreja para facilitar o join mais tarde
+        df_raw = df_raw.rename(columns={col_igreja: 'Igreja_Relatorio'})
+
         # Iterar sobre as linhas do relatório
         for _, row in df.iterrows():
             igreja_str = str(row[col_igreja]).strip()
@@ -189,7 +198,7 @@ def load_arquivos_relatorio(mes, ano):
     except Exception as e:
         st.error(f"Erro ao ler o relatório de anexos '{nome_arquivo}': {e}")
         
-    return arquivos_encontrados
+    return arquivos_encontrados, df_raw
 
 @st.cache_data
 def load_data(mes, ano):
@@ -297,6 +306,8 @@ with st.container(border=True):
     df_original = load_data(selected_mes, selected_ano)
     df_form = load_form_data()
     df_fechamento = load_fechamento_data(selected_mes, selected_ano)
+    arquivos_anexos, df_anexos_raw = load_arquivos_relatorio(selected_mes, selected_ano)
+
 
     if df_original is not None:
         st.markdown("---")
@@ -368,7 +379,7 @@ if df_original is not None:
         df = df[df['Livro'].astype(str).str.upper().str.contains(regex_pattern, regex=True, na=False)]
 
     st.markdown("---")
-    st.subheader("⚠️ Controle de Atividades e Anexos")
+    st.subheader("⚠️ Controle de Atividades, Anexos e Lançamentos Pendentes")
     
     # 4. USAR DF_BASE_PENDENCIAS PARA GERAR A AUDITORIA COMPLETA
     if 'Livro' in df_base_pendencias.columns:
@@ -377,11 +388,92 @@ if df_original is not None:
         st.error("A coluna 'Livro' não foi encontrada na planilha do SIGA.")
         siga_lancamentos = pd.DataFrame(columns=['Setor', 'Localidade', 'Livro'])
     
-    # Busca os anexos do arquivo Excel/ODS
-    arquivos_anexos = load_arquivos_relatorio(selected_mes, selected_ano)
     pendencias_siga = []
     pendencias_drive = []
     
+    # --- NOVO CÁLCULO: PENDÊNCIAS DE QUANTIDADE DE LANÇAMENTOS POR PÁGINA ---
+    pendencias_quantidade_lancamentos = []
+    
+    # Verifica se os dataframes necessários existem
+    if 'Livro' in df_base_pendencias.columns and df_anexos_raw is not None:
+        
+        # Cria uma coluna com código curto para facilitar o JOIN
+        df_base_qnt = df_base_pendencias.copy()
+        df_base_qnt['Codigo_Igreja'] = df_base_qnt['Localidade'].apply(lambda x: str(x).split(' - ')[0].strip().upper() if '-' in str(x) else str(x).upper())
+        
+        df_anexos_qnt = df_anexos_raw.copy()
+        # Assume que a primeira coluna tem o nome da igreja, como feito no load
+        col_ig_anexos = 'Igreja_Relatorio'
+        df_anexos_qnt['Codigo_Igreja'] = df_anexos_qnt[col_ig_anexos].apply(lambda x: str(x).split(' - ')[0].strip().upper() if '-' in str(x) else str(x).upper())
+        
+        # Mapeamento para buscar as colunas no relatorio de anexos baseadas nas chaves do MAPEAMENTO_ATIVIDADES
+        # Queremos cruzar Atividade do SIGA (Livro) -> Coluna no Anexo
+        
+        lista_igrejas_avaliar = df_base_qnt['Localidade'].unique()
+        
+        for igreja_completa in lista_igrejas_avaliar:
+            if igreja_completa in IGREJAS_IGNORADAS: continue
+                
+            setor_igreja = classificar_setor(igreja_completa)
+            codigo_igreja = str(igreja_completa).split(' - ')[0].strip().upper()
+            
+            # Pega os dados de lançamentos reais (SIGA) para esta igreja
+            dados_siga_igreja = df_base_qnt[df_base_qnt['Codigo_Igreja'] == codigo_igreja]
+            
+            # Pega a linha do relatório de anexos para esta igreja
+            dados_anexos_igreja = df_anexos_qnt[df_anexos_qnt['Codigo_Igreja'] == codigo_igreja]
+            
+            if dados_anexos_igreja.empty:
+                continue # Pula se não achou a igreja no relatório de anexos
+                
+            linha_anexo = dados_anexos_igreja.iloc[0]
+            
+            # Avalia cada atividade monitorada
+            for ativ_chave, ativ_variacoes in MAPEAMENTO_ATIVIDADES.items():
+                
+                # 1. Conta quantos lançamentos foram feitos no SIGA
+                regex_pattern = '|'.join(ativ_variacoes)
+                qtd_lancada = dados_siga_igreja[dados_siga_igreja['Livro'].astype(str).str.upper().str.contains(regex_pattern, regex=True, na=False)].shape[0]
+                
+                # 2. Descobre quantas páginas foram informadas no relatório de anexos
+                # Procura uma coluna no relatorio de anexos que corresponda à atividade
+                paginas_informadas = 0
+                coluna_encontrada = None
+                
+                for col in df_anexos_qnt.columns:
+                    col_upper = str(col).upper()
+                    if col_upper == 'IGREJA_RELATORIO' or col_upper == 'CODIGO_IGREJA' or 'OCORRENC' in col_upper or 'RELAT' in col_upper:
+                        continue
+                        
+                    # Se alguma variação da atividade bater com o nome da coluna
+                    if any(var in col_upper for var in ativ_variacoes):
+                        try:
+                            # Considera a primeira que achar
+                            paginas_informadas = float(linha_anexo[col])
+                            if pd.isna(paginas_informadas): paginas_informadas = 0
+                            coluna_encontrada = col
+                            break # Achou a coluna, para de procurar
+                        except (ValueError, TypeError):
+                            paginas_informadas = 0
+                            
+                # Se informou que tem página
+                if paginas_informadas > 0:
+                    qtd_esperada = paginas_informadas * 14
+                    
+                    # 3. Faz o batimento: se a diferença (Esperado - Lançado) for >= 14, é pendência
+                    diferenca = qtd_esperada - qtd_lancada
+                    
+                    if diferenca >= 14:
+                        pendencias_quantidade_lancamentos.append({
+                            'Setor': setor_igreja,
+                            'Igreja': igreja_completa,
+                            'Atividade': ativ_chave,
+                            'Páginas Informadas (Anexos)': paginas_informadas,
+                            'Qtd Esperada (Páginas x 14)': int(qtd_esperada),
+                            'Qtd Lançada (Sistema)': int(qtd_lancada),
+                            'Diferença (Faltam)': int(diferenca)
+                        })
+
     for index, row in siga_lancamentos.iterrows():
         setor = row['Setor']
         igreja_completa = row['Localidade']
@@ -463,6 +555,7 @@ if df_original is not None:
 
     df_pendencias_siga = pd.DataFrame(pendencias_siga) if pendencias_siga else pd.DataFrame()
     df_pendencias_drive = pd.DataFrame(pendencias_drive) if pendencias_drive else pd.DataFrame()
+    df_pendencias_qnt = pd.DataFrame(pendencias_quantidade_lancamentos) if pendencias_quantidade_lancamentos else pd.DataFrame()
 
     # --- FILTRAGEM FINAL DOS RESULTADOS PELO BOTÃO DE ATIVIDADE ---
     if filtro_atividade != "Todas":
@@ -473,15 +566,28 @@ if df_original is not None:
             palavras_chave_drive = MAPEAMENTO_ATIVIDADES.get(filtro_atividade, [filtro_atividade])
             regex_drive = '|'.join(palavras_chave_drive)
             df_pendencias_drive = df_pendencias_drive[df_pendencias_drive['Falta Anexar PDF no Drive'].str.upper().str.contains(regex_drive, regex=True, na=False)]
+            
+        if not df_pendencias_qnt.empty:
+            df_pendencias_qnt = df_pendencias_qnt[df_pendencias_qnt['Atividade'] == filtro_atividade]
 
-    # EXIBIÇÃO: PENDÊNCIAS SISTEMA
-    with st.expander(f"⚠️ {len(df_pendencias_siga)} congregações com pendências no Sistema (SIGA)"):
+    # EXIBIÇÃO: PENDÊNCIAS SISTEMA (CONGREGAÇÃO FALTANTE)
+    with st.expander(f"⚠️ {len(df_pendencias_siga)} congregações com pendências de categorias no Sistema (SIGA)"):
         if not df_pendencias_siga.empty: 
             st.dataframe(df_pendencias_siga, use_container_width=True, hide_index=True)
-            pdf_bytes = gerar_pdf("Pendencias no Sistema (SIGA)", [("Pendências", df_pendencias_siga)])
-            st.download_button("📥 Gerar PDF (Pendências SIGA)", data=pdf_bytes, file_name="Pendencias_SIGA.pdf", mime="application/pdf")
+            pdf_bytes = gerar_pdf("Pendencias de Categorias no Sistema (SIGA)", [("Pendências", df_pendencias_siga)])
+            st.download_button("📥 Gerar PDF (Pendências Categoria SIGA)", data=pdf_bytes, file_name="Pendencias_Categoria_SIGA.pdf", mime="application/pdf")
         else: 
-            st.success("Tudo certo no SIGA para os filtros selecionados!")
+            st.success("Tudo certo no SIGA para as categorias avaliadas nos filtros selecionados!")
+            
+    # NOVO EXIBIÇÃO: PENDÊNCIAS DE QUANTIDADE DE LANÇAMENTOS (ESPERADO X REALIZADO)
+    with st.expander(f"📉 {len(df_pendencias_qnt)} Pendências por Quantidade de Lançamentos (< 14 da diferença esperada)"):
+        if not df_pendencias_qnt.empty:
+            st.info("O cálculo verifica se (Páginas Informadas * 14) - (Lançamentos no Sistema) >= 14.")
+            st.dataframe(df_pendencias_qnt, use_container_width=True, hide_index=True)
+            pdf_bytes = gerar_pdf("Pendencias de Quantidade de Lancamentos", [("Diferença Lançado vs Esperado", df_pendencias_qnt)])
+            st.download_button("📥 Gerar PDF (Pendências Quantidade)", data=pdf_bytes, file_name="Pendencias_Quantidade_Lancamentos.pdf", mime="application/pdf")
+        else:
+            st.success("Nenhuma pendência de quantidade de lançamentos encontrada. Todas as igrejas parecem ter lançado os voluntários proporcionalmente às páginas anexadas.")
 
     # EXIBIÇÃO: PENDÊNCIAS DRIVE 
     with st.expander(f"📁 {len(df_pendencias_drive)} Pendencia de anexo no fechamento mensal"):
@@ -640,7 +746,8 @@ if df_original is not None:
     st.info("O arquivo gerado abaixo conterá todas as tabelas e métricas pendentes relativas aos filtros selecionados acima.")
     
     sessoes_gerais = [
-        ("Pendencias no Sistema (SIGA)", df_pendencias_siga),
+        ("Pendencias de Categorias (SIGA)", df_pendencias_siga),
+        ("Pendencias de Quantidade de Lancamentos", df_pendencias_qnt),
         ("Pendencia de anexo no fechamento", df_pendencias_drive),
         ("Fechamentos Mensais com status ABERTO", df_igrejas_abertas),
         ("Igrejas que não enviaram o Formulario", df_faltam),

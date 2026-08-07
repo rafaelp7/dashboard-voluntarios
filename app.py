@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 import io
+import os
 from fpdf import FPDF # Importação para gerar os PDFs
 
 # --- CONFIGURAÇÕES DA PÁGINA ---
@@ -135,16 +136,26 @@ def classificar_setor(localidade):
 @st.cache_data(ttl=3600)
 def load_arquivos_relatorio(mes, ano):
     """
-    Lê o relatório de anexos (Excel).
-    Espera-se que o relatório tenha uma coluna para a Igreja e colunas 
-    com o nome das atividades contendo valores numéricos (>0 = anexado).
+    Lê o relatório de anexos (Excel ou ODS).
     """
-    nome_arquivo = f"relatorio anexos {mes}-{ano}.xlsx"
+    nome_xlsx = f"relatorio anexos {mes}-{ano}.xlsx"
+    nome_ods = f"relatorio anexos {mes}-{ano}.ods"
+    
     arquivos_encontrados = {}
+    df = None
+    nome_arquivo = None
+    
+    if os.path.exists(nome_xlsx):
+        nome_arquivo = nome_xlsx
+        df = pd.read_excel(nome_arquivo)
+    elif os.path.exists(nome_ods):
+        nome_arquivo = nome_ods
+        df = pd.read_excel(nome_arquivo, engine="odf")
+    else:
+        st.warning(f"⚠️ Relatório de anexos não encontrado para este período: '{nome_xlsx}' ou '{nome_ods}'. As pendências de anexo serão avaliadas como 0.")
+        return arquivos_encontrados
     
     try:
-        df = pd.read_excel(nome_arquivo)
-        
         # Inferir a coluna da Igreja
         col_igreja = df.columns[0]
         for c in df.columns:
@@ -175,8 +186,6 @@ def load_arquivos_relatorio(mes, ano):
                         
                     arquivos_encontrados[igreja_cod][col_name] = num
                         
-    except FileNotFoundError:
-        st.warning(f"⚠️ Relatório de anexos não encontrado para este período: '{nome_arquivo}'. As pendências de anexo serão avaliadas como 0 (não anexado).")
     except Exception as e:
         st.error(f"Erro ao ler o relatório de anexos '{nome_arquivo}': {e}")
         
@@ -184,10 +193,15 @@ def load_arquivos_relatorio(mes, ano):
 
 @st.cache_data
 def load_data(mes, ano):
-    nome_arquivo = f"tabela {mes}-{ano}.xlsx"
-    try:
-        df = pd.read_excel(nome_arquivo)
-    except FileNotFoundError:
+    nome_xlsx = f"tabela {mes}-{ano}.xlsx"
+    nome_ods = f"tabela {mes}-{ano}.ods"
+    
+    df = None
+    if os.path.exists(nome_xlsx):
+        df = pd.read_excel(nome_xlsx)
+    elif os.path.exists(nome_ods):
+        df = pd.read_excel(nome_ods, engine="odf")
+    else:
         return None
     
     df.columns = df.columns.str.strip()
@@ -221,8 +235,18 @@ def load_fechamento_data(mes, ano):
 
 @st.cache_data
 def load_form_data():
+    nome_xlsx = 'FORMULÁRIO QUALITATIVO 2026 (respostas).xlsx'
+    nome_ods = 'FORMULÁRIO QUALITATIVO 2026 (respostas).ods'
+    
+    df_form = None
+    if os.path.exists(nome_xlsx):
+        df_form = pd.read_excel(nome_xlsx)
+    elif os.path.exists(nome_ods):
+        df_form = pd.read_excel(nome_ods, engine="odf")
+    else:
+        return None
+
     try:
-        df_form = pd.read_excel('FORMULÁRIO QUALITATIVO 2026 (respostas).xlsx')
         colunas_igreja = [c for c in df_form.columns if 'ESCOLHA A CASA DE ORAÇÃO' in str(c).upper()]
         def extrair_igreja(row):
             for col in colunas_igreja:
@@ -235,7 +259,7 @@ def load_form_data():
         if 'MÊS' in df_form.columns: df_form['Mes_Submissao'] = pd.to_numeric(df_form['MÊS'], errors='coerce')
         if 'ANO' in df_form.columns: df_form['Ano_Submissao'] = pd.to_numeric(df_form['ANO'], errors='coerce')
         return df_form
-    except FileNotFoundError:
+    except Exception as e:
         return None
 
 # --- INICIALIZAÇÃO DE VARIÁVEIS DE ESTADO (MENU) ---
@@ -353,7 +377,7 @@ if df_original is not None:
         st.error("A coluna 'Livro' não foi encontrada na planilha do SIGA.")
         siga_lancamentos = pd.DataFrame(columns=['Setor', 'Localidade', 'Livro'])
     
-    # Busca os anexos do arquivo Excel gerado via Github Actions
+    # Busca os anexos do arquivo Excel/ODS
     arquivos_anexos = load_arquivos_relatorio(selected_mes, selected_ano)
     pendencias_siga = []
     pendencias_drive = []
@@ -369,7 +393,7 @@ if df_original is not None:
         # Pega o dicionário de contagens para esta igreja. Se não existir, retorna um dict vazio.
         contagens_igreja = arquivos_anexos.get(codigo_igreja, {})
         
-        # A) Verifica Falta no SIGA (Mantido original)
+        # A) Verifica Falta no SIGA 
         falta_siga = []
         for atv in ATIVIDADES_OBRIGATORIAS:
             if not any(atv in lancado for lancado in atividades_lancadas): falta_siga.append(atv)
@@ -378,7 +402,6 @@ if df_original is not None:
         # Se houve anexo mas não está no SIGA, é falta no SIGA.
         for atv_esp in ATIVIDADES_ESPORADICAS:
             if not any(atv_esp in lancado for lancado in atividades_lancadas):
-                # Função auxiliar para verificar as colunas do relatório
                 def verificar_contagem_esporadica(atividade):
                     for col_name, count in contagens_igreja.items():
                         if atividade in col_name and count > 0:
@@ -460,7 +483,7 @@ if df_original is not None:
         else: 
             st.success("Tudo certo no SIGA para os filtros selecionados!")
 
-    # EXIBIÇÃO: PENDÊNCIAS DRIVE (AGORA BASEADO NO RELATÓRIO DO GITHUB)
+    # EXIBIÇÃO: PENDÊNCIAS DRIVE 
     with st.expander(f"📁 {len(df_pendencias_drive)} Pendencia de anexo no fechamento mensal"):
         if not df_pendencias_drive.empty: 
             st.dataframe(df_pendencias_drive, use_container_width=True, hide_index=True)
@@ -530,14 +553,12 @@ if df_original is not None:
                 if filtro_setor != "Todos" and classificar_setor(igreja) != filtro_setor: continue
                     
                 atividades_exigidas = set()
-                # AQUI USAMOS O DF_BASE_PENDENCIAS PARA AVALIAR O FORMULÁRIO SEM O FILTRO DA TELA
                 df_igreja_siga = df_base_pendencias[df_base_pendencias['Localidade'] == igreja]
                 
                 if 'Livro' in df_igreja_siga.columns:
                     for atv in df_igreja_siga['Livro'].dropna(): atividades_exigidas.add(str(atv).upper())
                 
                 cod_ig = str(igreja).split(' - ')[0].strip()
-                # Para o Forms, também verificamos se houve anexo para atividades não obrigatórias
                 contagens_ig = arquivos_anexos.get(cod_ig, {})
                 
                 def buscar_nas_contagens_form(termos_busca):
@@ -638,4 +659,4 @@ if df_original is not None:
     )
 
 else: 
-    st.error(f"⚠️ Base de dados principal não encontrada: 'tabela {selected_mes}-{selected_ano}.xlsx'.")
+    st.error(f"⚠️ Base de dados principal não encontrada: 'tabela {selected_mes}-{selected_ano}.xlsx' ou '.ods'.")

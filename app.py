@@ -95,7 +95,7 @@ IGREJAS_IGNORADAS = ['ADM - MARINGÁ - PR', 'PIA - MARINGÁ', 'BR 14-0601 - MARI
 MAPEAMENTO_DIRETO = {
     "4 - COZINHA": "COZINHA",
     "2 - MANUTENÇÃO PREVENTIVA": "MANUTENÇÃO PREVENTIVA",
-    "4 - ANEXO - ADMINISTRATIVO": "MANUTENÇÃO PREVENTIVA",  # Ajuste para a categoria padrão desejada
+    "4 - ANEXO - ADMINISTRATIVO": "MANUTENÇÃO PREVENTIVA",
     "4 - ANEXO - INSTRUTORES GEL": "GEL",
     "4 - ALMOXARIFADO - PIEDADE": "PIEDADE",
     "4 - ANEXO - INSTRUTORES GEM": "GEM",
@@ -131,12 +131,6 @@ def classificar_setor(localidade):
 
 @st.cache_data(ttl=3600)
 def load_arquivos_relatorio(mes, ano):
-    """
-    Lê o relatório de anexos (Excel ou ODS).
-    Retorna dois objetos:
-    1. arquivos_encontrados: Dicionário com contagens simples (0 ou >0) para verificar se houve anexo.
-    2. df_anexos_raw: O DataFrame bruto lido, para podermos usar as colunas originais na contagem de páginas.
-    """
     nome_xlsx = f"relatorio anexos {mes}-{ano}.xlsx"
     nome_ods = f"relatorio anexos {mes}-{ano}.ods"
     
@@ -154,40 +148,31 @@ def load_arquivos_relatorio(mes, ano):
         st.warning(f"⚠️ Relatório de anexos não encontrado para este período: '{nome_xlsx}' ou '{nome_ods}'. As pendências de anexo serão avaliadas como 0.")
         return arquivos_encontrados, None
     
-    df_raw = df.copy() # Guarda o dataframe original
+    df_raw = df.copy()
     
     try:
-        # Inferir a coluna da Igreja
         col_igreja = df.columns[0]
         for c in df.columns:
             if any(x in str(c).upper() for x in ['IGREJA', 'LOCALIDADE', 'CÓDIGO']):
                 col_igreja = c
                 break
                 
-        # Renomeia a coluna da igreja para facilitar o join mais tarde
         df_raw = df_raw.rename(columns={col_igreja: 'Igreja_Relatorio'})
 
-        # Iterar sobre as linhas do relatório
         for _, row in df.iterrows():
             igreja_str = str(row[col_igreja]).strip()
-            # Extrai apenas o código da igreja (ex: BR 14-0602)
             igreja_cod = igreja_str.split(' - ')[0].strip().upper() if '-' in igreja_str else igreja_str.upper()
-            
-            # Inicializa o dicionário para esta igreja
             arquivos_encontrados[igreja_cod] = {}
             
-            # Varre as outras colunas (que devem ser as contagens das atividades)
             for col in df.columns:
                 if col != col_igreja:
                     col_name = str(col).strip().upper()
                     valor = row[col]
-                    # Tenta converter para número, se falhar ou for NaN, assume 0
                     try:
                         num = float(valor)
                         if pd.isna(num): num = 0
                     except (ValueError, TypeError):
                         num = 0
-                        
                     arquivos_encontrados[igreja_cod][col_name] = num
                         
     except Exception as e:
@@ -218,7 +203,6 @@ def load_data(mes, ano):
     if 'Localidade' in df.columns:
         df['Setor'] = df['Localidade'].apply(classificar_setor)
         
-    # --- HIGIENIZAÇÃO DA COLUNA LIVRO COM MAPEAMENTO DIRETO ---
     if 'Livro' in df.columns:
         df['Livro'] = df['Livro'].apply(
             lambda x: MAPEAMENTO_DIRETO.get(str(x).strip().upper(), str(x).strip().upper()) if pd.notna(x) else x
@@ -273,7 +257,6 @@ if 'filtro_igreja' not in st.session_state:
 if 'filtro_atividade' not in st.session_state:
     st.session_state.filtro_atividade = 'Todas'
 
-# Função para resetar filtros ao trocar o período (Evita que o app quebre ao mudar de mês)
 def ao_mudar_periodo():
     st.session_state.filtro_setor = 'Todos'
     st.session_state.filtro_igreja = 'Todas'
@@ -281,12 +264,29 @@ def ao_mudar_periodo():
 
 st.title("📊 Painel de Controle - Voluntários")
 
+# ==========================================
+# CÁLCULO DINÂMICO DO MÊS ANTERIOR
+# ==========================================
+hoje = datetime.now()
+if hoje.month == 1:
+    mes_anterior_num = 12
+    ano_anterior_num = hoje.year - 1
+else:
+    mes_anterior_num = hoje.month - 1
+    ano_anterior_num = hoje.year
+
+opcoes_meses = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
+opcoes_anos = ["2024", "2025", "2026", "2027", "2028", "2029", "2030"]
+
+idx_mes_padrao = mes_anterior_num - 1
+idx_ano_padrao = opcoes_anos.index(str(ano_anterior_num)) if str(ano_anterior_num) in opcoes_anos else 0
+
 with st.container(border=True):
     st.subheader("📅 Período de Análise")
     
     col_data1, col_data2, col_btn, _ = st.columns([2, 2, 2, 4])
-    selected_mes = col_data1.selectbox("Selecione o Mês", ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"], index=5, on_change=ao_mudar_periodo)
-    selected_ano = col_data2.selectbox("Selecione o Ano", ["2025", "2026", "2027", "2028"], index=1, on_change=ao_mudar_periodo)
+    selected_mes = col_data1.selectbox("Selecione o Mês", opcoes_meses, index=idx_mes_padrao, on_change=ao_mudar_periodo)
+    selected_ano = col_data2.selectbox("Selecione o Ano", opcoes_anos, index=idx_ano_padrao, on_change=ao_mudar_periodo)
     
     # Botão para atualizar dados
     with col_btn:
@@ -360,7 +360,7 @@ if df_original is not None:
     if filtro_setor != "Todos": df = df[df['Setor'] == filtro_setor]
     if filtro_igreja != "Todas": df = df[df['Localidade'] == filtro_igreja]
     
-    # 2. BASE DE DADOS PARA AUDITORIA (SEM FILTRO DE ATIVIDADE PARA NÃO PERDER CONTEXTO DE FALTA)
+    # 2. BASE DE DADOS PARA AUDITORIA
     df_base_pendencias = df.copy()
 
     # 3. APLICAR FILTRO DE ATIVIDADE NO DF DE EXIBIÇÃO / KPIs
@@ -384,7 +384,6 @@ if df_original is not None:
     pendencias_drive = []
     pendencias_quantidade_lancamentos = []
     
-    # Mapeia os lançamentos existentes no SIGA agrupados por Localidade
     mapa_lancamentos_siga = {}
     if 'Livro' in df_base_pendencias.columns:
         for (setor_grp, loc_grp), df_grp in df_base_pendencias.groupby(['Setor', 'Localidade']):
@@ -392,7 +391,6 @@ if df_original is not None:
     else:
         st.error("A coluna 'Livro' não foi encontrada na planilha do SIGA.")
 
-    # Prepara o DataFrame de anexos para verificação de quantidade
     df_anexos_qnt = None
     if df_anexos_raw is not None:
         df_anexos_qnt = df_anexos_raw.copy()
@@ -405,7 +403,6 @@ if df_original is not None:
         codigo_igreja = str(igreja_completa).split(' - ')[0].strip().upper()
         contagens_igreja = arquivos_anexos.get(codigo_igreja, {})
         
-        # Pega os dados lançados no SIGA para esta igreja (vazio se não tiver registros)
         dados_siga_igreja = mapa_lancamentos_siga.get(igreja_completa, pd.DataFrame())
         
         if not dados_siga_igreja.empty and 'Livro' in dados_siga_igreja.columns:
@@ -413,7 +410,6 @@ if df_original is not None:
         else:
             atividades_lancadas = []
 
-        # A) Verifica Falta no SIGA
         falta_siga = []
         for atv in ATIVIDADES_OBRIGATORIAS:
             if not any(atv in lancado for lancado in atividades_lancadas):
@@ -448,7 +444,6 @@ if df_original is not None:
                 'Falta Lançar no Sistema': ", ".join(falta_siga)
             })
 
-        # B) Verifica Falta de PDF (Anexo) com base nas contagens do relatório
         falta_drive = []
         for lancado in atividades_lancadas:
             encontrou = False
@@ -529,7 +524,6 @@ if df_original is not None:
     df_pendencias_drive = pd.DataFrame(pendencias_drive) if pendencias_drive else pd.DataFrame()
     df_pendencias_qnt = pd.DataFrame(pendencias_quantidade_lancamentos) if pendencias_quantidade_lancamentos else pd.DataFrame()
 
-    # --- FILTRAGEM FINAL DOS RESULTADOS PELO BOTÃO DE ATIVIDADE ---
     if filtro_atividade != "Todas":
         if not df_pendencias_siga.empty:
             df_pendencias_siga = df_pendencias_siga[df_pendencias_siga['Falta Lançar no Sistema'].str.upper().str.contains(filtro_atividade, na=False)]
@@ -542,7 +536,6 @@ if df_original is not None:
         if not df_pendencias_qnt.empty:
             df_pendencias_qnt = df_pendencias_qnt[df_pendencias_qnt['Atividade'] == filtro_atividade]
 
-    # EXIBIÇÃO: PENDÊNCIAS SISTEMA (CONGREGAÇÃO FALTANTE)
     with st.expander(f"⚠️ {len(df_pendencias_siga)} congregações com pendências de categorias no Sistema (SIGA)"):
         if not df_pendencias_siga.empty: 
             st.dataframe(df_pendencias_siga, use_container_width=True, hide_index=True)
@@ -551,7 +544,6 @@ if df_original is not None:
         else: 
             st.success("Tudo certo no SIGA para as categorias avaliadas nos filtros selecionados!")
 
-    # EXIBIÇÃO: PENDÊNCIAS DRIVE 
     with st.expander(f"📁 {len(df_pendencias_drive)} Pendencia de anexo no fechamento mensal"):
         if not df_pendencias_drive.empty: 
             st.dataframe(df_pendencias_drive, use_container_width=True, hide_index=True)
@@ -595,7 +587,6 @@ if df_original is not None:
         df_form_mes = df_form[(df_form['Mes_Submissao'] == mes_num) & (df_form['Ano_Submissao'] == ano_num)]
         igrejas_que_responderam = df_form_mes['Igreja_Identificada'].dropna().unique().tolist()
         
-        # Igrejas alvo calculadas com base no cadastro do setor
         igrejas_alvo = [loc for s_n, loc in todas_igrejas_cadastro]
         faltam_form = [ig for ig in igrejas_alvo if ig not in igrejas_que_responderam and ig not in IGREJAS_IGNORADAS]
         
@@ -603,14 +594,13 @@ if df_original is not None:
             if faltam_form:
                 df_faltam = pd.DataFrame(faltam_form, columns=["Igreja"])
                 df_faltam['Setor'] = df_faltam['Igreja'].apply(classificar_setor)
-                df_faltam = df_faltam[['Setor', 'Igreja']] # Reordenando
+                df_faltam = df_faltam[['Setor', 'Igreja']]
                 st.dataframe(df_faltam, use_container_width=True, hide_index=True)
                 pdf_bytes = gerar_pdf("Igrejas que nao enviaram o Formulario", [("Faltam Formularios", df_faltam)])
                 st.download_button("📥 Gerar PDF (Sem Formulário)", data=pdf_bytes, file_name="Faltam_Formularios.pdf", mime="application/pdf")
             else: 
                 st.success("Todas as congregações filtradas enviaram o formulário!")
 
-        # Validação de atividades analisadas no forms
         colunas_analisadas = [c for c in df_form_mes.columns if 'ASSINALAR AS ATIVIDADES' in str(c).upper()]
         pendencias_ativ_form = []
         
@@ -655,7 +645,6 @@ if df_original is not None:
 
         df_pendencias_ativ_form = pd.DataFrame(pendencias_ativ_form) if pendencias_ativ_form else pd.DataFrame()
         
-        # --- FILTRO FINAL DE FORMULÁRIOS PELO BOTÃO DE ATIVIDADE ---
         if filtro_atividade != "Todas":
             if not df_pendencias_ativ_form.empty:
                 df_pendencias_ativ_form = df_pendencias_ativ_form[df_pendencias_ativ_form['Faltou analisar no Form'].str.upper().str.contains(filtro_atividade, na=False)]
@@ -679,7 +668,6 @@ if df_original is not None:
             
         fig_erros = px.bar(pd.DataFrame(erros_por_atividade), x='Atividade', y='Taxa (%)', title="Taxa de Erro vs Lançamentos (Formulário Qualitativo) - Clique na barra para detalhar", hover_data=['Erros', 'Lançamentos'], text_auto='.1f', color='Taxa (%)', color_continuous_scale="Reds")
         
-        # Bloqueio de zoom para telas móveis
         fig_erros.update_layout(
             coloraxis_showscale=False,
             dragmode=False, 
@@ -748,10 +736,9 @@ if df_original is not None:
     col_kpi2.metric("Valor Total (R$)", f"R$ {total_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
     col_kpi3.metric("Ticket Médio (R$)", f"R$ {media_valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
     
-    # ALERTAS DE QUANTIDADE (FINAL DA PÁGINA)
     st.markdown("---")
     st.subheader("Alertas de Verificação (Diferença de Quantidades)")
-    st.warning("⚠️ **Aviso Importante para Verificação Manual:** O valor esperado de lançamentos (vindo da planilha de anexos) é calculated por páginas. Se, por algum motivo, um anexo for enviado com páginas a mais (ex: páginas adicionais em branco, canceladas ou preenchidas incorretamente na origem), isso levará a um alerta de falso positivo nesta seção. Utilize esta lista apenas para verificação manual de possíveis esquecimentos na digitação.")
+    st.warning("⚠️ **Aviso Importante para Verificação Manual:** O valor esperado de lançamentos (vindo da planilha de anexos) é calculado por páginas. Se, por algum motivo, um anexo for enviado com páginas a mais (ex: páginas adicionais em branco, canceladas ou preenchidas incorretamente na origem), isso levará a um alerta de falso positivo nesta seção. Utilize esta lista apenas para verificação manual de possíveis esquecimentos na digitação.")
     
     with st.expander(f"📉 {len(df_pendencias_qnt)} Alertas de Quantidade de Lançamentos (Diferença Esperado vs Realizado >= 14)"):
         if not df_pendencias_qnt.empty:

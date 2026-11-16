@@ -316,9 +316,15 @@ def carregar_dados_periodo(periodo):
                 c_hor = next((c for c in raw_q.columns if "horário" in str(c).lower() and sufixo in str(c).lower()), None)
                 c_bra = next((c for c in raw_q.columns if "branco" in str(c).lower() and sufixo in str(c).lower()), None)
 
-                v_ras = float(pd.to_numeric(r[c_ras], errors="coerce") or 0) if c_ras else 0.0
-                v_hor = float(pd.to_numeric(r[c_hor], errors="coerce") or 0) if c_hor else 0.0
-                v_bra = float(pd.to_numeric(r[c_bra], errors="coerce") or 0) if c_bra else 0.0
+                def num_seguro(col):
+                    if not col:
+                        return 0
+                    val = pd.to_numeric(r[col], errors="coerce")
+                    return 0 if pd.isna(val) else int(round(float(val)))
+
+                v_ras = num_seguro(c_ras)
+                v_hor = num_seguro(c_hor)
+                v_bra = num_seguro(c_bra)
                 tot_err = v_ras + v_hor + v_bra
 
                 # Se reportou erro numérico > 0 na atividade, também considera como analisada
